@@ -1,11 +1,13 @@
 # hq
 
-Small JSONL-aware autocomplete compiler for terminal-first input.
+hq is a small JSONL-aware autocomplete compiler.
 
-This repository starts from a narrow product core:
+The first product boundary is:
 
-- understand JSONL world and cursor context
-- produce compile-ready suggestions
-- finalize only accepted suggestions
-- append accepted instructions to a JSONL queue
-- keep CLI/REPL previews reproducible
+1. read the JSONL world,
+2. read the current cursor context,
+3. suggest only context-valid candidates,
+4. finalize only the human-chosen candidate,
+5. append durable instructions as JSONL.
+
+This keeps the core reusable for terminal, CLI, and REPL surfaces without making route or prefix the product model.
