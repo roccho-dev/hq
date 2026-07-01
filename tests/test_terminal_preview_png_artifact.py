@@ -24,28 +24,29 @@ class TerminalPreviewPngArtifactTests(unittest.TestCase):
         env = os.environ.copy()
         env["PYTHONPATH"] = "."
         subprocess.run(
-            [
-                sys.executable,
-                "tools/render_terminal_preview_png.py",
-                "--input",
-                str(input_text),
-                "--out",
-                str(out),
-            ],
+            [sys.executable, "tools/render_terminal_preview_png.py", "--input", str(input_text), "--out", str(out)],
             check=True,
             env=env,
         )
 
-    def test_actual_cli_output_contains_autocomplete_ux(self):
+    def test_actual_cli_output_contains_all_ascii_screens(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            stdout_file = Path(tmpdir) / "terminal.txt"
-            stdout = self.run_cli(stdout_file)
-            self.assertIn("actual command: python -m hq demo-autocomplete", stdout)
-            self.assertIn("BUFFER: {", stdout)
-            self.assertIn('BUFFER: {"st', stdout)
-            self.assertIn("CANDIDATES:", stdout)
-            self.assertIn("ACCEPT PREVIEW:", stdout)
-            self.assertIn("final JSONL row:", stdout)
+            stdout = self.run_cli(Path(tmpdir) / "terminal.txt")
+            for index in range(1, 11):
+                self.assertIn(f"UI {index:02d}:", stdout)
+            self.assertIn("Ctrl-N/P move", stdout)
+            self.assertIn("Ctrl-Space details", stdout)
+            self.assertIn("op: complete_key", stdout)
+            self.assertIn("op: set_value", stdout)
+            self.assertIn("op: rename_key", stdout)
+
+    def test_actual_cli_output_uses_highlight_not_number_choice(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            stdout = self.run_cli(Path(tmpdir) / "terminal.txt")
+            self.assertNotIn("[0]", stdout)
+            self.assertIn("| | >  | status", stdout)
+            self.assertIn("| | >  | title", stdout)
+            self.assertIn("| > done", stdout)
 
     def test_png_preview_is_generated_from_actual_cli_stdout(self):
         with tempfile.TemporaryDirectory() as tmpdir:
