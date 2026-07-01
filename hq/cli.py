@@ -7,7 +7,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from .finalize import append_instruction_jsonl
 from .terminal_surface import autocomplete_payload, choose_payload
 
-WIDTH = 72
+WIDTH = 74
 
 SCHEMA: dict[str, Any] = {
     "type": "object",
