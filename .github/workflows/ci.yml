@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: python3 -m unittest discover -s tests
-      - run: python3 tools/render_terminal_preview_png.py --out artifacts/hq-terminal-autocomplete-preview.png
+      - run: PYTHONPATH=. python3 tools/render_terminal_preview_png.py --out artifacts/hq-terminal-autocomplete-preview.png
       - uses: actions/upload-artifact@v4
         with:
           name: hq-terminal-autocomplete-preview
