@@ -3,6 +3,3 @@ name = "hq-jsonl-autocomplete"
 version = "0.1.0"
 description = "Small JSONL-aware autocomplete compiler"
 requires-python = ">=3.11"
-
-[tool.pytest.ini_options]
-pythonpath = ["."]
