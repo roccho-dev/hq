@@ -1,6 +1,6 @@
 import unittest
 
-from hq import JsonlWorld, derive_cursor_context, suggest_keys
+from hq import JsonlWorld, derive_cursor_context, diagnose_keys, suggest_keys, suggest_values
 
 SCHEMA = {
     "type": "object",
@@ -8,7 +8,7 @@ SCHEMA = {
     "properties": {
         "kind": {"type": "string"},
         "title": {"type": "string"},
-        "status": {"type": "string"},
+        "status": {"type": "string", "enum": ["done", "draft", "deferred"]},
     },
 }
 
@@ -38,8 +38,25 @@ class SuggestionTests(unittest.TestCase):
         context = derive_cursor_context('{"st')
         suggestion = suggest_keys(world, context)[0]
         self.assertEqual(suggestion.label, "status")
-        self.assertEqual(suggestion.compileDraft["op"], "set_key")
+        self.assertEqual(suggestion.compileDraft["op"], "complete_key")
         self.assertEqual(suggestion.edit["replacePartial"], "st")
+
+    def test_enum_value_suggestions_are_engine_backed(self):
+        world = JsonlWorld.from_schema_and_rows(SCHEMA, [])
+        context = derive_cursor_context('{"status": "d')
+        suggestions = suggest_values(world, context)
+        self.assertEqual([item.label for item in suggestions], ["done", "draft", "deferred"])
+        self.assertEqual(suggestions[0].compileDraft["op"], "set_value")
+
+    def test_duplicate_and_unknown_key_diagnostics_have_fixes(self):
+        world = JsonlWorld.from_schema_and_rows(SCHEMA, [])
+        duplicate = diagnose_keys(world, derive_cursor_context('{"kind":"task","kind'))
+        self.assertEqual(duplicate[0].code, "duplicate_key")
+        self.assertTrue(duplicate[0].fixes)
+
+        unknown = diagnose_keys(world, derive_cursor_context('{"statuz": "done"'))
+        self.assertEqual(unknown[0].code, "unknown_key")
+        self.assertEqual(unknown[0].fixes[0].compileDraft["op"], "rename_key")
 
 
 if __name__ == "__main__":
