@@ -7,7 +7,7 @@ import unittest
 
 
 class TerminalPreviewPngArtifactTests(unittest.TestCase):
-    def test_cli_stdout_and_png_are_generated(self):
+    def test_cli_stdout_and_png_are_generated_from_engine_backed_demo(self):
         env = os.environ.copy()
         env["PYTHONPATH"] = "."
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -22,8 +22,11 @@ class TerminalPreviewPngArtifactTests(unittest.TestCase):
             )
             stdout_file.write_text(completed.stdout, encoding="utf-8")
             self.assertIn("UI 01:", completed.stdout)
-            self.assertIn("UI 10:", completed.stdout)
-            self.assertIn("Enter accept", completed.stdout)
+            self.assertIn("UI 08:", completed.stdout)
+            self.assertIn("source: choose_payload", completed.stdout)
+            self.assertIn("unknown_key", completed.stdout)
+            self.assertIn("set_value", completed.stdout)
+            self.assertNotIn("recent_prs", completed.stdout)
             subprocess.run(
                 [sys.executable, "tools/render_terminal_preview_png.py", "--input", str(stdout_file), "--out", str(png_file)],
                 check=True,

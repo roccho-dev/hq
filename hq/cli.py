@@ -1,318 +1,196 @@
 from __future__ import annotations
 
+import json
 import sys
-from typing import Iterable, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
-WIDTH = 60
+from .finalize import append_instruction_jsonl
+from .terminal_surface import autocomplete_payload, choose_payload
+
+WIDTH = 72
+
+SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "required": ["status", "title"],
+    "properties": {
+        "status": {"type": "string", "enum": ["done", "draft", "deferred"], "description": "current work state"},
+        "title": {"type": "string", "description": "short task title"},
+        "assignee": {"type": "string", "description": "owner or reviewer"},
+        "priority": {"type": "string", "description": "triage priority"},
+        "due": {"type": "string", "description": "target date"},
+        "ticket": {"type": "string", "description": "external issue id"},
+        "tags": {"type": "array", "description": "list of labels"},
+    },
+}
+
+ROWS_JSONL = '{"status":"done","title":"Add terminal preview"}\n'
 
 
-def hr() -> str:
-    return "+" + "-" * WIDTH + "+"
+def hr(width: int = WIDTH) -> str:
+    return "+" + "-" * width + "+"
 
 
-def row(text: str = "") -> str:
-    return "| " + text[: WIDTH - 2].ljust(WIDTH - 2) + " |"
+def row(text: str = "", width: int = WIDTH) -> str:
+    return "| " + text[: width - 2].ljust(width - 2) + " |"
 
 
 def block(title: str, lines: Iterable[str]) -> list[str]:
     return [title, "", hr(), *[row(line) for line in lines], hr()]
 
 
-def candidate_table(widths: tuple[int, int, int], rows: Sequence[tuple[bool, str, str, str]]) -> list[str]:
-    w1, w2, w3 = widths
-    sep = " +----+" + "-" * (w1 + 2) + "+" + "-" * (w2 + 2) + "+" + "-" * (w3 + 2) + "+"
-    out = ["completion", sep]
-    for active, label, kind, detail in rows:
-        mark = ">" if active else " "
-        out.append(f" | {mark:<2} | {label:<{w1}} | {kind:<{w2}} | {detail:<{w3}} |")
-    out.append(sep)
-    return out
+def _scenario(buffer_with_cursor: str) -> tuple[str, int]:
+    position = buffer_with_cursor.index("|")
+    return buffer_with_cursor.replace("|", "", 1), position
 
 
-def ui_01() -> list[str]:
-    lines = [
-        "hq jsonl input",
-        "> {",
-        "    |",
-        "",
-        *candidate_table((10, 8, 25), [
-            (True, "status", "required", "current work state"),
-            (False, "title", "required", "short task title"),
-            (False, "assignee", "optional", "owner or reviewer"),
-            (False, "priority", "optional", "triage priority"),
-            (False, "due", "optional", "target date"),
-        ]),
-        "",
-        "preview",
-        "  insert: \"status\":",
-        "  result: { \"status\": | }",
-        "",
-        "compile draft",
-        "  op: set_key",
-        "  key: status",
-        "  target: current_object",
-        "",
-        "Tab insert  Enter accept  Esc close  Ctrl-N/P move",
-    ]
-    return block("UI 01: object open, key suggestions", lines)
+def _property_detail(key: str) -> str:
+    prop = SCHEMA.get("properties", {}).get(key, {})
+    detail = prop.get("description")
+    return str(detail) if detail else "schema key"
 
 
-def ui_02() -> list[str]:
-    lines = [
-        "hq jsonl input",
-        "> { \"st",
-        "       |",
-        "",
-        *candidate_table((10, 8, 25), [
-            (True, "status", "required", "current work state"),
-            (False, "started_at", "optional", "timestamp when started"),
-            (False, "story", "optional", "narrative / note"),
-        ]),
-        "",
-        "preview",
-        "  before: { \"st|",
-        "  insert: atus\":",
-        "  after:  { \"status\": |",
-        "",
-        "compile draft",
-        "  op: complete_key",
-        "  key: status",
-        "  partial: st",
-        "",
-        "Tab insert  Enter accept  Esc close",
-    ]
-    return block("UI 02: key fragment", lines)
+def _json_lines(value: Mapping[str, Any]) -> list[str]:
+    return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True).splitlines()
 
 
-def ui_03() -> list[str]:
-    lines = [
-        "hq jsonl input",
-        "> { \"status\": \"d",
-        "              |",
-        "",
-        *candidate_table((8, 6, 29), [
-            (True, "done", "enum", "task is complete"),
-            (False, "draft", "enum", "task is not ready yet"),
-            (False, "deferred", "enum", "task is postponed"),
-        ]),
-        "",
-        "preview",
-        "  before: { \"status\": \"d|",
-        "  insert: one\"",
-        "  after:  { \"status\": \"done\"|",
-        "",
-        "compile draft",
-        "  op: set_value",
-        "  key: status",
-        "  value: done",
-        "",
-        "Enter accept  Tab insert  Esc close",
-    ]
-    return block("UI 03: value fragment, enum suggestions", lines)
+def _apply_edit(buffer: str, position: int, edit: Mapping[str, Any]) -> str:
+    kind = edit.get("kind")
+    if kind in {"insert_key", "complete_key"}:
+        partial = str(edit.get("replacePartial") or "")
+        start = position - len(partial)
+        return buffer[:start] + str(edit.get("text", "")) + buffer[position:]
+    if kind == "set_value":
+        partial = str(edit.get("replacePartial") or "")
+        start = position - len(partial)
+        return buffer[:start] + str(edit.get("text", "")) + buffer[position:]
+    if kind == "rename_key":
+        before = '"' + str(edit.get("from")) + '"'
+        after = '"' + str(edit.get("to")) + '"'
+        return buffer.replace(before, after, 1)
+    return buffer
 
 
-def ui_04() -> list[str]:
-    lines = [
-        "hq jsonl input",
-        "> { \"status\": \"done\", \"ti",
-        "                      |",
-        "",
-        *candidate_table((7, 8, 28), [
-            (True, "title", "required", "short task title"),
-            (False, "ticket", "optional", "external issue id"),
-            (False, "timeline", "optional", "progress note"),
-        ]),
-        "",
+def _candidate_rows(payload: Mapping[str, Any]) -> list[str]:
+    suggestions = list(payload.get("suggestions", []))
+    if not suggestions:
+        return ["completion", "  (no suggestions)"]
+    lines = ["completion", " +----+----------------------+----------+------------------------------+"]
+    for idx, item in enumerate(suggestions[:5]):
+        mark = ">" if idx == 0 else " "
+        label = str(item.get("label", ""))
+        kind = str(item.get("detail", item.get("kind", "")))
+        meaning = item.get("meaning", {})
+        key = str(meaning.get("key", label)) if isinstance(meaning, Mapping) else label
+        detail = _property_detail(key) if item.get("kind") == "key" else str(item.get("detail", ""))
+        lines.append(f" | {mark:<2} | {label:<20} | {kind:<8} | {detail:<28} |")
+    lines.append(" +----+----------------------+----------+------------------------------+")
+    return lines
+
+
+def _diagnostic_rows(payload: Mapping[str, Any]) -> list[str]:
+    diagnostics = list(payload.get("diagnostics", []))
+    if not diagnostics:
+        return []
+    lines = ["diagnostics", " +----+----------------+------------------------------------------+"]
+    for item in diagnostics:
+        lines.append(f" | !  | {str(item.get('code', '')):<14} | {str(item.get('message', '')):<40} |")
+    lines.append(" +----+----------------+------------------------------------------+")
+    fixes = [fix for item in diagnostics for fix in item.get("fixes", [])]
+    if fixes:
+        lines.extend(["", "quick fix", " +----+----------------------+------------------------------+"])
+        for idx, fix in enumerate(fixes[:3]):
+            mark = ">" if idx == 0 else " "
+            lines.append(f" | {mark:<2} | {str(fix.get('label', '')):<20} | {str(fix.get('detail', '')):<28} |")
+        lines.append(" +----+----------------------+------------------------------+")
+    return lines
+
+
+def _context_rows(payload: Mapping[str, Any]) -> list[str]:
+    context = payload.get("context", {})
+    if not isinstance(context, Mapping):
+        return []
+    return [
         "context",
-        "  object: current",
-        "  present keys: status",
-        "  missing required: title",
-        "",
+        f"  state: {context.get('state', '')}",
+        f"  partial: {context.get('partial', '')}",
+        f"  present keys: {', '.join(context.get('presentKeys', [])) or '-'}",
+        f"  missing required: {', '.join(context.get('missingRequired', [])) or '-'}",
+    ]
+
+
+def _preview_rows(buffer: str, position: int, payload: Mapping[str, Any]) -> list[str]:
+    suggestions = list(payload.get("suggestions", []))
+    selected = suggestions[0] if suggestions else None
+    if selected is None:
+        diagnostics = list(payload.get("diagnostics", []))
+        fixes = [fix for item in diagnostics for fix in item.get("fixes", [])]
+        selected = fixes[0] if fixes else None
+    if selected is None:
+        return []
+    result = _apply_edit(buffer, position, selected.get("edit", {}))
+    lines = [
         "preview",
-        "  before: { \"status\": \"done\", \"ti|",
-        "  insert: tle\":",
-        "  after:  { \"status\": \"done\", \"title\": |",
+        f"  selected: {selected.get('label', '')}",
+        f"  result: {result[:58]}",
         "",
         "compile draft",
-        "  op: complete_key",
-        "  key: title",
-        "  reason: required_missing",
     ]
-    return block("UI 04: next key after completed pair", lines)
+    for line in _json_lines(selected.get("compileDraft", {})):
+        lines.append("  " + line)
+    return lines
 
 
-def ui_05() -> list[str]:
+def view(title: str, buffer_with_cursor: str) -> list[str]:
+    buffer, position = _scenario(buffer_with_cursor)
+    payload = autocomplete_payload(SCHEMA, ROWS_JSONL, buffer, position)
+    diagnostics = _diagnostic_rows(payload)
     lines = [
-        "hq jsonl input",
-        "> { \"status\": \"done\", \"status",
-        "                      |",
+        "hq autocomplete",
+        f"> {buffer_with_cursor}",
         "",
-        "diagnostics",
-        " +----+-------------+--------------------------------------+",
-        " | !  | duplicate   | key already exists: status          |",
-        " +----+-------------+--------------------------------------+",
+        *_context_rows(payload),
         "",
-        *candidate_table((8, 8, 27), [
-            (True, "title", "required", "short task title"),
-            (False, "assignee", "optional", "owner or reviewer"),
-            (False, "priority", "optional", "triage priority"),
-        ]),
+        *diagnostics,
+        *([""] if diagnostics else []),
+        *_candidate_rows(payload),
         "",
-        "preview",
-        "  replace partial key: status -> title",
-        "  result: { \"status\": \"done\", \"title\": |",
+        *_preview_rows(buffer, position, payload),
         "",
-        "compile draft",
-        "  op: replace_partial_key",
-        "  from: status",
-        "  to: title",
+        "Enter accept  Tab insert  Esc close  Ctrl-N/P move",
     ]
-    return block("UI 05: duplicate key blocked", lines)
+    return block(title, [line for line in lines if line != ""])
 
 
-def ui_06() -> list[str]:
+def accept_view() -> list[str]:
+    buffer, _position = _scenario('{"status": "done", "ti|')
+    instruction = choose_payload(SCHEMA, ROWS_JSONL, buffer, 0)
+    jsonl = append_instruction_jsonl("", instruction).strip()
     lines = [
-        "hq jsonl input",
-        "> { \"statuz\": \"done\"",
-        "     |",
-        "",
-        "diagnostics",
-        " +----+-------------+--------------------------------------+",
-        " | !  | unknown_key | statuz is not in schema             |",
-        " +----+-------------+--------------------------------------+",
-        "",
-        "quick fix",
-        " +----+-----------------------+----------------------------+",
-        " | >  | rename to status     | closest schema key         |",
-        " |    | keep as custom key   | mark as extension          |",
-        " +----+-----------------------+----------------------------+",
-        "",
-        "preview",
-        "  before: { \"statuz\": \"done\" }",
-        "  after:  { \"status\": \"done\" }",
-        "",
-        "compile draft",
-        "  op: rename_key",
-        "  from: statuz",
-        "  to: status",
-    ]
-    return block("UI 06: unknown key, did-you-mean", lines)
-
-
-def ui_07() -> list[str]:
-    lines = [
-        "hq jsonl input",
-        "> { \"status\": \"done\", \"title\": \"Add CI UX preview\" }",
-        "",
         "accepted suggestion",
-        " +--------------------------------------------------------+",
-        " | key/value complete                                     |",
-        " | status: done                                           |",
-        " | title: Add CI UX preview                               |",
-        " +--------------------------------------------------------+",
+        "  source: choose_payload(schema, rows, buffer, 0)",
         "",
         "final instruction",
-        " +--------------------------------------------------------+",
-        " | {                                                      |",
-        " |   \"op\": \"append_jsonl_instruction\",                    |",
-        " |   \"payload\": {                                         |",
-        " |     \"status\": \"done\",                                  |",
-        " |     \"title\": \"Add CI UX preview\"                       |",
-        " |   }                                                    |",
-        " | }                                                      |",
-        " +--------------------------------------------------------+",
+        *_json_lines(instruction),
+        "",
+        "jsonl row",
+        jsonl,
         "",
         "Enter queue  Esc cancel  E edit",
     ]
     return block("UI 07: accept confirmation, instruction ready", lines)
 
 
-def ui_08() -> list[str]:
-    lines = [
-        "hq complete",
-        "> status=d|",
-        "",
-        "> done      enum   set status to done",
-        "  draft     enum   set status to draft",
-        "  deferred  enum   set status to deferred",
-        "",
-        "preview: status=done",
-        "draft:   op=set_value key=status value=done",
-        "",
-        "Enter accept  Tab insert  Esc close",
-    ]
-    return block("UI 08: compact single-line mode", lines)
-
-
-def ui_09() -> list[str]:
-    lines = [
-        "hq jsonl input",
-        "> {",
-        "    \"status\": \"done\",",
-        "    \"title\": \"Add CI UX preview\",",
-        "    \"pr\": |",
-        "  }",
-        "",
-        *candidate_table((7, 6, 31), [
-            (True, "5", "number", "hq terminal surface PR"),
-            (False, "4", "number", "closed superseded PR"),
-        ]),
-        "",
-        "context",
-        "  key: pr",
-        "  type: number",
-        "  source: recent_prs",
-        "",
-        "preview",
-        "  result: \"pr\": 5",
-        "",
-        "compile draft",
-        "  op: set_value",
-        "  key: pr",
-        "  value: 5",
-    ]
-    return block("UI 09: multi-line object mode", lines)
-
-
-def ui_10() -> list[str]:
-    lines = [
-        "hq autocomplete",
-        "document: work-item.jsonl",
-        "cursor: line 1 col 18",
-        "mode: key",
-        "",
-        "buffer",
-        "  { \"status\": \"done\", \"ti|",
-        "",
-        "suggestions",
-        " +----+---------+----------+------------------------------+",
-        " | >  | title   | required | short task title             |",
-        " |    | ticket  | optional | external issue id            |",
-        " |    | tags    | optional | list of labels               |",
-        " +----+---------+----------+------------------------------+",
-        "",
-        "details",
-        "  selected: title",
-        "  reason: required_missing",
-        "  edit: replace partial \"ti\" with \"title\":",
-        "",
-        "result",
-        "  { \"status\": \"done\", \"title\": |",
-        "",
-        "compile draft",
-        "  {",
-        "    \"op\": \"complete_key\",",
-        "    \"key\": \"title\",",
-        "    \"target\": \"current_object\"",
-        "  }",
-        "",
-        "Enter accept  Tab insert  Ctrl-Space details  Esc close",
-    ]
-    return block("UI 10: full LSP-like surface", lines)
-
-
 def demo_autocomplete_screen() -> str:
-    screens = [ui_01(), ui_02(), ui_03(), ui_04(), ui_05(), ui_06(), ui_07(), ui_08(), ui_09(), ui_10()]
+    screens = [
+        view("UI 01: object open, key suggestions", "{|"),
+        view("UI 02: key fragment", '{"st|'),
+        view("UI 03: value fragment, enum suggestions", '{"status": "d|'),
+        view("UI 04: next key after completed pair", '{"status": "done", "ti|'),
+        view("UI 05: duplicate key blocked", '{"status": "done", "status|'),
+        view("UI 06: unknown key, did-you-mean", '{"statuz": "done"|'),
+        accept_view(),
+        view("UI 08: full engine-backed surface", '{"status": "done", "title": "Add CI UX preview", |'),
+    ]
     return "\n\n".join("\n".join(screen) for screen in screens) + "\n"
 
 
