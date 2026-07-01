@@ -1,9 +1,15 @@
 from pathlib import Path
+import hashlib
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
+
+
+EXPECTED_STDOUT_SHA256 = "2f3621c7a272065467ce021da254a7b6af11e88337cbd31d36fe72dd8ce4255d"
+EXPECTED_STDOUT_BYTES = 18077
+EXPECTED_STDOUT_LINES = 254
 
 
 class TerminalPreviewPngArtifactTests(unittest.TestCase):
@@ -21,6 +27,10 @@ class TerminalPreviewPngArtifactTests(unittest.TestCase):
                 capture_output=True,
             )
             stdout_file.write_text(completed.stdout, encoding="utf-8")
+            stdout_bytes = completed.stdout.encode("utf-8")
+            self.assertEqual(hashlib.sha256(stdout_bytes).hexdigest(), EXPECTED_STDOUT_SHA256)
+            self.assertEqual(len(stdout_bytes), EXPECTED_STDOUT_BYTES)
+            self.assertEqual(len(completed.stdout.splitlines()), EXPECTED_STDOUT_LINES)
             self.assertIn("UI 01:", completed.stdout)
             self.assertIn("UI 08:", completed.stdout)
             self.assertIn("source: choose_payload", completed.stdout)
