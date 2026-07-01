@@ -49,6 +49,12 @@ class CursorContextTests(unittest.TestCase):
         context = derive_cursor_context('{"kind": "ta')
         self.assertEqual(context.state, "value")
         self.assertEqual(context.partial, "ta")
+        self.assertEqual(context.current_key, "kind")
+
+    def test_missing_required_keys_use_world(self):
+        world = JsonlWorld.from_schema_and_rows(SCHEMA, [])
+        context = derive_cursor_context('{"kind":"task",')
+        self.assertEqual(context.missing_required_keys_for(world), ("title",))
 
 if __name__ == "__main__":
     unittest.main()
