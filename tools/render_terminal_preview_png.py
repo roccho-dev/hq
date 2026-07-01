@@ -6,20 +6,6 @@ import struct
 import zlib
 from pathlib import Path
 
-from hq.terminal_surface import choose_payload, complete_payload
-
-SCHEMA = {
-    "type": "object",
-    "required": ["kind", "title"],
-    "properties": {
-        "kind": {"type": "string"},
-        "title": {"type": "string"},
-        "status": {"type": "string"},
-    },
-}
-
-ROWS_JSONL = '{"kind":"task","title":"ship preview"}\n'
-
 
 def _glyph(rows: str) -> tuple[str, ...]:
     return tuple(rows.splitlines())
@@ -28,6 +14,7 @@ def _glyph(rows: str) -> tuple[str, ...]:
 FONT = {
     " ": _glyph("00000\n00000\n00000\n00000\n00000\n00000\n00000"),
     "?": _glyph("01110\n10001\n00001\n00010\n00100\n00000\n00100"),
+    "!": _glyph("00100\n00100\n00100\n00100\n00100\n00000\n00100"),
     ":": _glyph("00000\n00100\n00100\n00000\n00100\n00100\n00000"),
     ".": _glyph("00000\n00000\n00000\n00000\n00000\n01100\n01100"),
     ",": _glyph("00000\n00000\n00000\n00000\n01100\n00100\n01000"),
@@ -36,7 +23,17 @@ FONT = {
     "=": _glyph("00000\n00000\n11111\n00000\n11111\n00000\n00000"),
     "[": _glyph("01110\n01000\n01000\n01000\n01000\n01000\n01110"),
     "]": _glyph("01110\n00010\n00010\n00010\n00010\n00010\n01110"),
+    "{": _glyph("00010\n00100\n00100\n01000\n00100\n00100\n00010"),
+    "}": _glyph("01000\n00100\n00100\n00010\n00100\n00100\n01000"),
+    "(": _glyph("00010\n00100\n01000\n01000\n01000\n00100\n00010"),
+    ")": _glyph("01000\n00100\n00010\n00010\n00010\n00100\n01000"),
     ">": _glyph("10000\n01000\n00100\n00010\n00100\n01000\n10000"),
+    "<": _glyph("00001\n00010\n00100\n01000\n00100\n00010\n00001"),
+    "^": _glyph("00100\n01010\n10001\n00000\n00000\n00000\n00000"),
+    "\"": _glyph("01010\n01010\n01010\n00000\n00000\n00000\n00000"),
+    "'": _glyph("00100\n00100\n01000\n00000\n00000\n00000\n00000"),
+    "/": _glyph("00001\n00010\n00100\n01000\n10000\n00000\n00000"),
+    "\\": _glyph("10000\n01000\n00100\n00010\n00001\n00000\n00000"),
     "0": _glyph("01110\n10001\n10011\n10101\n11001\n10001\n01110"),
     "1": _glyph("00100\n01100\n00100\n00100\n00100\n00100\n01110"),
     "2": _glyph("01110\n10001\n00001\n00010\n00100\n01000\n11111"),
@@ -76,43 +73,6 @@ FONT = {
 }
 
 
-def preview_lines() -> list[str]:
-    full = complete_payload(SCHEMA, ROWS_JSONL, "{")
-    partial = complete_payload(SCHEMA, ROWS_JSONL, '{"st')
-    chosen = choose_payload(SCHEMA, ROWS_JSONL, "{", 0)
-
-    lines = [
-        "HQ AUTOCOMPLETE PNG EVIDENCE",
-        "SOURCE: ACTUAL Hq TERMINAL_SURFACE PAYLOAD",
-        "",
-        "CASE 1: BUFFER OBJECT_OPEN",
-        "COMMAND: HQ COMPLETE",
-        "CANDIDATES:",
-    ]
-    for index, item in enumerate(full):
-        draft = item["compileDraft"]
-        lines.append(f"[{index}] {item['label']} -> {draft['op']} {draft['key']}")
-
-    lines += [
-        "",
-        "CASE 2: BUFFER PARTIAL ST",
-        "COMMAND: HQ COMPLETE",
-        "CANDIDATES:",
-    ]
-    for index, item in enumerate(partial):
-        draft = item["compileDraft"]
-        lines.append(f"[{index}] {item['label']} -> {draft['op']} {draft['key']}")
-
-    lines += [
-        "",
-        "CASE 3: CHOOSE 0",
-        f"ROW TYPE: {chosen['type']}",
-        f"ROW LABEL: {chosen['label']}",
-        f"ROW DRAFT: {chosen['compileDraft']['op']} {chosen['compileDraft']['key']}",
-    ]
-    return [line.upper() for line in lines]
-
-
 class Canvas:
     def __init__(self, width: int, height: int, color: tuple[int, int, int]):
         self.width = width
@@ -135,7 +95,7 @@ class Canvas:
 
     def text(self, x: int, y: int, text: str, color: tuple[int, int, int], scale: int = 2) -> None:
         cursor = x
-        for char in text:
+        for char in text.upper():
             glyph = FONT.get(char, FONT["?"])
             for gy, row in enumerate(glyph):
                 for gx, bit in enumerate(row):
@@ -163,19 +123,26 @@ def write_png(path: Path, canvas: Canvas) -> None:
     path.write_bytes(data)
 
 
-def render(path: Path) -> None:
-    lines = preview_lines()
+def render_text(text: str, path: Path) -> None:
+    lines = text.rstrip("\n").splitlines()
+    if not lines:
+        raise ValueError("input text is empty")
     scale = 2
-    width = max(900, min(1400, max(len(line) for line in lines) * 6 * scale + 64))
+    width = max(980, min(1800, max(len(line) for line in lines) * 6 * scale + 64))
     height = len(lines) * 18 + 52
     canvas = Canvas(width, height, (16, 18, 24))
     canvas.rect(0, 0, width, 34, (35, 42, 55))
-    canvas.text(24, 12, "HQ PNG PREVIEW", (146, 232, 166), scale=2)
+    canvas.text(24, 12, "ACTUAL CLI OUTPUT: PYTHON -M HQ DEMO-AUTOCOMPLETE", (146, 232, 166), scale=2)
     y = 50
     for line in lines:
-        color = (146, 232, 166) if line.startswith("CASE") else (232, 236, 243)
-        if line.startswith("["):
+        stripped = line.strip().upper()
+        color = (232, 236, 243)
+        if stripped.startswith("CASE") or stripped.startswith("ACCEPT"):
+            color = (146, 232, 166)
+        elif stripped.startswith(">") or stripped.startswith("[") or stripped.startswith("  >"):
             color = (139, 213, 255)
+        elif stripped.startswith("BUFFER") or stripped.startswith("CURSOR"):
+            color = (255, 213, 139)
         canvas.text(24, y, line, color, scale=scale)
         y += 18
     write_png(path, canvas)
@@ -183,9 +150,10 @@ def render(path: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--input", required=True)
     parser.add_argument("--out", default="artifacts/hq-terminal-autocomplete-preview.png")
     args = parser.parse_args()
-    render(Path(args.out))
+    render_text(Path(args.input).read_text(encoding="utf-8"), Path(args.out))
 
 
 if __name__ == "__main__":
