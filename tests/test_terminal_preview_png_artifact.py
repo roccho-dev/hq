@@ -6,6 +6,12 @@ import tempfile
 import unittest
 
 
+EXPECTED_STDOUT_BYTES = 18077
+EXPECTED_STDOUT_LINES = 254
+EXPECTED_STDOUT_BYTE_SUM = 895698
+PNG_SIGNATURE = bytes([137, 80, 78, 71, 13, 10, 26, 10])
+
+
 class TerminalPreviewPngArtifactTests(unittest.TestCase):
     def test_cli_stdout_and_png_are_generated_from_engine_backed_demo(self):
         env = os.environ.copy()
@@ -21,6 +27,10 @@ class TerminalPreviewPngArtifactTests(unittest.TestCase):
                 capture_output=True,
             )
             stdout_file.write_text(completed.stdout, encoding="utf-8")
+            stdout_bytes = completed.stdout.encode("utf-8")
+            self.assertEqual(len(stdout_bytes), EXPECTED_STDOUT_BYTES)
+            self.assertEqual(len(completed.stdout.splitlines()), EXPECTED_STDOUT_LINES)
+            self.assertEqual(sum(stdout_bytes), EXPECTED_STDOUT_BYTE_SUM)
             self.assertIn("UI 01:", completed.stdout)
             self.assertIn("UI 08:", completed.stdout)
             self.assertIn("source: choose_payload", completed.stdout)
@@ -33,7 +43,7 @@ class TerminalPreviewPngArtifactTests(unittest.TestCase):
                 env=env,
             )
             data = png_file.read_bytes()
-            self.assertTrue(data.startswith(b"\x89PNG\r\n\x1a\n"))
+            self.assertTrue(data.startswith(PNG_SIGNATURE))
             self.assertGreater(len(data), 1000)
             self.assertEqual(list(Path(tmpdir).glob("*.html")), [])
 
