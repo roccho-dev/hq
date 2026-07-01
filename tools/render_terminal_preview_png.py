@@ -21,6 +21,8 @@ FONT = {
     "-": _glyph("00000\n00000\n00000\n11111\n00000\n00000\n00000"),
     "_": _glyph("00000\n00000\n00000\n00000\n00000\n00000\n11111"),
     "=": _glyph("00000\n00000\n11111\n00000\n11111\n00000\n00000"),
+    "+": _glyph("00000\n00100\n00100\n11111\n00100\n00100\n00000"),
+    "|": _glyph("00100\n00100\n00100\n00100\n00100\n00100\n00100"),
     "[": _glyph("01110\n01000\n01000\n01000\n01000\n01000\n01110"),
     "]": _glyph("01110\n00010\n00010\n00010\n00010\n00010\n01110"),
     "{": _glyph("00010\n00100\n00100\n01000\n00100\n00100\n00010"),
@@ -137,9 +139,9 @@ def render_text(text: str, path: Path) -> None:
     for line in lines:
         stripped = line.strip().upper()
         color = (232, 236, 243)
-        if stripped.startswith("CASE") or stripped.startswith("ACCEPT"):
+        if stripped.startswith("UI ") or stripped.startswith("ACCEPT"):
             color = (146, 232, 166)
-        elif stripped.startswith(">") or stripped.startswith("[") or stripped.startswith("  >"):
+        elif stripped.startswith(">") or stripped.startswith("  >") or "| >  |" in stripped:
             color = (139, 213, 255)
         elif stripped.startswith("BUFFER") or stripped.startswith("CURSOR"):
             color = (255, 213, 139)
