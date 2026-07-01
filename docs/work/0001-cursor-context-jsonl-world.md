@@ -13,3 +13,6 @@ Done:
 - context is derived from the current buffer
 - JSONL data drives suggestions later
 - route and prefix are not the core model
+
+Proof:
+- `python3 -m unittest discover -s tests` is the local close check.
