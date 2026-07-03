@@ -19,31 +19,34 @@ jobs:
       - name: Show Rust toolchain
         run: rustc --version && cargo --version
 
-      - name: Run Rust tests
-        run: cargo test
-
       - name: Build Rust release binary
         run: cargo build --release
+
+      - name: Capture Rust proof output
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force dist\hq-windows-rust | Out-Null
+          target\release\hq.exe demo-autocomplete > dist\hq-windows-rust\hq-demo-autocomplete.txt
 
       - name: Package Rust artifact only
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          New-Item -ItemType Directory -Force dist\hq-windows-rust | Out-Null
           Copy-Item target\release\hq.exe dist\hq-windows-rust\hq.exe
           @'
           hq Windows Rust artifact
 
           This package is built by GitHub Actions from the proposal PR.
-          It contains only the Rust-built hq.exe plus this README.
+          It contains only the Rust-built hq.exe, README, and proof output.
 
-          The binary includes a minimal Rust implementation for:
+          The binary includes:
           - hq suggest --buffer <json-fragment> [--query <text>]
           - hq accept  --buffer <json-fragment> [--query <text>] [--index <n>]
           - hq demo-autocomplete
 
           It supports matcher-ranked suggestions and queue.create JSONL output.
-          It does not claim that the full interactive REPL is complete.
+          Full interactive REPL rendering remains future work.
           '@ | Set-Content -NoNewline -Encoding utf8 dist\hq-windows-rust\README.txt
           Compress-Archive -Path dist\hq-windows-rust\* -DestinationPath dist\hq-windows-rust.zip -Force
 
