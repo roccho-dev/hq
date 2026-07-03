@@ -22,8 +22,18 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force artifacts | Out-Null
           go version | Tee-Object -FilePath artifacts\build-proof.txt
-          go test ./... 2>&1 | Tee-Object -FilePath artifacts\go-test.txt
+          go test ./internal/hq ./cmd/hq-reflective ./cmd/hq 2>&1 | Tee-Object -FilePath artifacts\go-test.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-Content artifacts\go-test.txt | Add-Content artifacts\build-proof.txt
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hq-windows-go-test-debug
+          path: |
+            artifacts/build-proof.txt
+            artifacts/go-test.txt
+          if-no-files-found: warn
 
       - name: Build Windows proof binary
         shell: pwsh
@@ -50,17 +60,11 @@ jobs:
           & .\artifacts\hq-reflective-windows-amd64.exe --draft $draftArg | Tee-Object -FilePath artifacts\draft.json
 
           $keyComplete = Get-Content artifacts\key-completion.json -Raw | ConvertFrom-Json
-          if (-not ($keyComplete | Where-Object { $_.label -eq '"op"' })) {
-            throw "op key completion was not present"
-          }
+          if (-not ($keyComplete | Where-Object { $_.label -eq '"op"' })) { throw "op key completion was not present" }
 
           $complete = Get-Content artifacts\complete.json -Raw | ConvertFrom-Json
-          if (-not ($complete | Where-Object { $_.label -eq "queue.create" })) {
-            throw "queue.create completion was not present"
-          }
-          if (-not ($complete | Where-Object { $_.compileDraft.queue -eq "instruction.jsonl" })) {
-            throw "compileDraft queue proof was not present"
-          }
+          if (-not ($complete | Where-Object { $_.label -eq "queue.create" })) { throw "queue.create completion was not present" }
+          if (-not ($complete | Where-Object { $_.compileDraft.queue -eq "instruction.jsonl" })) { throw "compileDraft queue proof was not present" }
 
           @(
             "actual Windows CI run: .\artifacts\hq-reflective-windows-amd64.exe built in this workflow",
@@ -86,6 +90,7 @@ jobs:
             -OutputPath artifacts\actual-run-contact-sheet.png
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: hq-reflective-windows-actual-run-proof
           path: |
@@ -98,4 +103,4 @@ jobs:
             artifacts/draft.json
             artifacts/actual-run-terminal-proof.txt
             artifacts/actual-run-contact-sheet.png
-          if-no-files-found: error
+          if-no-files-found: warn

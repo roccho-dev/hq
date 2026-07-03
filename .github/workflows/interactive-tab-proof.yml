@@ -20,8 +20,16 @@ jobs:
       - name: Build Linux proof binary
         run: |
           mkdir -p artifacts
-          go test ./...
+          go test ./... > artifacts/go-test-linux.txt 2>&1
+          cat artifacts/go-test-linux.txt
           go build -o artifacts/hq-reflective-linux-amd64 ./cmd/hq-reflective
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hq-linux-go-test-debug
+          path: artifacts/go-test-linux.txt
+          if-no-files-found: warn
 
       - name: Prove Linux interactive Tab completion through PTY
         run: |
