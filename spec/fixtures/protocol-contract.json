@@ -21,7 +21,7 @@
       "expectGoContextKind": "key",
       "expectPythonContextState": "object_open",
       "expectPartial": "",
-      "expectLabels": ["status", "title"],
+      "expectLabels": ["status", "title", "assignee", "priority"],
       "expectDraftQueue": "instruction.jsonl",
       "expectDraftKey": "status"
     },
