@@ -64,7 +64,8 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install --disable-pip-version-check --quiet --upgrade pip
-          python -m pip install --disable-pip-version-check --quiet setuptools wexpect
+          python -m pip install --disable-pip-version-check --quiet "setuptools==80.9.0" wexpect
+          python -c "import pkg_resources; import wexpect; print('windows terminal proof deps ok')"
 
       - name: Build Windows proof binary
         shell: pwsh
