@@ -1,0 +1,2 @@
+{"case":"key","expectedQueue":"instruction.jsonl"}
+{"case":"enum","expectedKey":"op","expectedQueue":"instruction.jsonl"}
