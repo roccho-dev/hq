@@ -1,0 +1,48 @@
+name: Interactive tab proof
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "proposal/**"
+
+jobs:
+  pty-tab-proof:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+
+      - name: Build Linux proof binary
+        run: |
+          mkdir -p artifacts
+          go test ./...
+          go build -o artifacts/hq-reflective-linux-amd64 ./cmd/hq-reflective
+
+      - name: Prove interactive Tab completion through PTY
+        run: |
+          python3 scripts/pty-tab-proof-v2.py \
+            ./artifacts/hq-reflective-linux-amd64 \
+            artifacts/interactive-tab-proof.txt
+
+      - name: Require literal Tab proof markers
+        run: |
+          grep -F 'SENT_KEYS: {" + <TAB>' artifacts/interactive-tab-proof.txt
+          grep -F 'SENT_BYTES_HEX: 7b2209' artifacts/interactive-tab-proof.txt
+          grep -F 'PTY_SESSION: real pseudo terminal' artifacts/interactive-tab-proof.txt
+          grep -F 'PROOF_SCHEMA: temporary tabProofA/tabProofB/tabProofC keys not present in seeded history' artifacts/interactive-tab-proof.txt
+          grep -F '"tabProofA"' artifacts/interactive-tab-proof.txt
+          grep -F '"tabProofB"' artifacts/interactive-tab-proof.txt
+          grep -F '"tabProofC"' artifacts/interactive-tab-proof.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hq-reflective-interactive-tab-proof
+          path: |
+            artifacts/hq-reflective-linux-amd64
+            artifacts/interactive-tab-proof.txt
+          if-no-files-found: error

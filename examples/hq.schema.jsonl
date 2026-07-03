@@ -1,0 +1,5 @@
+{"key":"op","type":"enum","required":true,"description":"operation to compile into instruction","group":"instruction","enum":["queue.create","queue.preview","queue.dispatch"]}
+{"key":"target","type":"enum","required":true,"description":"resolver / dispatch target","group":"instruction","enum":["ctx","local","windows","nixos","ssh"]}
+{"key":"priority","type":"enum","required":false,"description":"queue ranking hint","group":"instruction","enum":["high","normal","low"]}
+{"key":"payload","type":"object","required":true,"description":"user data or operation arguments","group":"data"}
+{"key":"reason","type":"string","required":false,"description":"human audit trail","group":"audit"}

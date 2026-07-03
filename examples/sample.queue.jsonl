@@ -1,0 +1,1 @@
+{"kind":"accepted.instruction","queue":"instruction.jsonl","instruction":{"op":"queue.create","target":"ctx","payload":{"path":"demo.jsonl"}},"reason":"line accepted by human"}
