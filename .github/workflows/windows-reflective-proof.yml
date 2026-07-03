@@ -19,11 +19,11 @@ jobs:
 
       - name: Test Go reflective implementation
         shell: pwsh
-        continue-on-error: true
         run: |
           New-Item -ItemType Directory -Force artifacts | Out-Null
           go version | Tee-Object -FilePath artifacts\build-proof.txt
           go test ./internal/hq ./cmd/hq-reflective ./cmd/hq 2>&1 | Tee-Object -FilePath artifacts\go-test.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-Content artifacts\go-test.txt | Add-Content artifacts\build-proof.txt
 
       - uses: actions/upload-artifact@v4
