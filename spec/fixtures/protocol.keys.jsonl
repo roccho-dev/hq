@@ -1,0 +1,2 @@
+{"buffer":"{\"","cursor":2,"expectedQueue":"instruction.jsonl"}
+{"buffer":"{\"op\":q","cursor":7,"expectedKey":"op","expectedQueue":"instruction.jsonl"}
