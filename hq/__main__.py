@@ -1,1 +1,3 @@
-print("hq python tools")
+from .cli import main
+
+raise SystemExit(main())
