@@ -1,0 +1,118 @@
+# Proposal: cmp-like matcher REPL and Windows release path
+
+Refs: #9
+
+## Status
+
+Proposal support artifact only. This does not claim that the REPL implementation is complete.
+
+## Purpose
+
+The current product boundary says hq should read a JSONL world, read cursor context, suggest only context-valid candidates, finalize only the human-chosen candidate, and append durable instructions as JSONL.
+
+This proposal narrows the next implementation route:
+
+1. Keep hq core as a JSONL-aware candidate / queue-draft compiler.
+2. Make the default REPL UI editor-like and low-noise.
+3. Use a matcher-only fuzzy scorer for ranking suggestions.
+4. Do not use fzf as the default completion UI.
+5. Keep fzf-style deep picker behavior optional.
+6. Add CI coverage for Windows packaging and tag-time GitHub Release upload.
+
+## UX decision
+
+Default UI should be:
+
+```text
+inline hint / ghost suggestion
+small cmp-like popup
+mini queue draft pane
+accept -> queue.create JSONL
+```
+
+Not default:
+
+```text
+fullscreen picker
+fzf as completion replacement
+vim/nvim as core dependency
+```
+
+## Why matcher-only
+
+The recent local proof showed that the useful part for the default REPL is not a full fuzzy picker. It is only fuzzy ranking over already-valid hq suggestions.
+
+Therefore the hq UI boundary should be:
+
+```text
+JsonlWorld + CursorContext
+  -> Suggestion[] with compileDraft
+  -> matcher ranks Suggestion[]
+  -> cmp-like surface displays top suggestions
+  -> accept creates queue instruction JSONL
+```
+
+This keeps the UI small and avoids making fzf, vim, or a full TUI the product model.
+
+## Queue-draft requirement
+
+The default REPL must not stop at single candidate insertion. It must also support queue-draft construction.
+
+Required states:
+
+```text
+candidate.item
+queue.draft.item
+queue.draft.patch
+queue.create
+queue.created
+dispatch.request
+```
+
+Minimum accepted behavior:
+
+1. A candidate can be accepted into the input buffer.
+2. A candidate can also be added into a queue draft.
+3. The queue draft can be shown in a mini pane.
+4. Accepting the draft emits a durable `queue.create` JSONL instruction.
+5. Unaccepted candidates do not mutate the durable queue.
+
+## What this PR intentionally does not implement
+
+This proposal branch should not pretend to finish the runtime REPL. It only adds:
+
+1. the proposal route,
+2. Windows package CI,
+3. tag-time GitHub Release wiring.
+
+Runtime implementation should follow in issue-linked PRs.
+
+## Release path
+
+For now, the Windows release artifact is a no-extra-dependencies zip package:
+
+```text
+hq-windows.zip
+  hq/
+  README.md
+  hq.cmd
+  hq-terminal-autocomplete.txt
+```
+
+`hq.cmd` delegates to:
+
+```text
+python -m hq %*
+```
+
+This is intentionally not an exe yet. Exe packaging can be proposed later after the REPL runtime boundary is stable.
+
+## Merge readiness
+
+This proposal becomes merge-ready when:
+
+1. Linux CI remains green.
+2. Windows package workflow builds on pull request.
+3. Tag trigger can create or update a GitHub Release asset.
+4. PR body clearly states that runtime REPL completion is still future work.
+
