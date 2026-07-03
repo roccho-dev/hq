@@ -10,7 +10,9 @@ jobs:
       - uses: actions/checkout@v4
       - run: mkdir -p artifacts/proof/src artifacts/proof/frames artifacts/proof/screens
       - run: cat proofs/nucleo-matcher-cmp/src/*.b64.part* | base64 -d > artifacts/proof/src/hq_fuzzy_cmp_demo.c
-      - run: gcc -std=c11 -O2 -Wall -Wextra -o artifacts/proof/hq_fuzzy_cmp_demo artifacts/proof/src/hq_fuzzy_cmp_demo.c
+      - run: wc -c artifacts/proof/src/hq_fuzzy_cmp_demo.c | tee artifacts/proof/source-size.txt
+      - run: gcc -std=c11 -O2 -Wall -Wextra -o artifacts/proof/hq_fuzzy_cmp_demo artifacts/proof/src/hq_fuzzy_cmp_demo.c 2> artifacts/proof/gcc.log
+        continue-on-error: true
       - run: artifacts/proof/hq_fuzzy_cmp_demo key-aid > artifacts/proof/frames/01_key_aid.txt
       - run: artifacts/proof/hq_fuzzy_cmp_demo val-ae > artifacts/proof/frames/02_value_aex.txt
       - run: artifacts/proof/hq_fuzzy_cmp_demo act-arcx > artifacts/proof/frames/03_action_arcx.txt
@@ -24,6 +26,7 @@ jobs:
       - run: for f in artifacts/proof/frames/*.txt; do b=$(basename "$f" .txt); python3 tools/render_terminal_preview_png.py --input "$f" --out "artifacts/proof/screens/${b}.png"; done
       - run: python3 tools/render_terminal_preview_png.py --input artifacts/proof/frames/06_queue_draft.txt --out artifacts/proof/screens/00_contact_sheet.png
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: hq-nucleo-cmp-proof-screens
           path: artifacts/proof
