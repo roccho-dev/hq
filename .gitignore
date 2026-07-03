@@ -1,0 +1,6 @@
+# Generated runtime artifacts
+/dist/*
+!/dist/MANIFEST.md
+
+# Local temp output
+/tmp/
