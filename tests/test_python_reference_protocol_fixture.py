@@ -23,16 +23,17 @@ class PythonReferenceProtocolFixtureTests(unittest.TestCase):
                         suggestions = suggest_values(world, context)
                     else:
                         suggestions = suggest_keys(world, context)
-                    labels = [item.label for item in suggestions[: len(case["expectLabels"] )]]
-                    self.assertEqual(labels, case["expectLabels"])
+                    labels = [item.label for item in suggestions]
+                    self.assertEqual(sorted(labels), sorted(case["expectLabels"]))
                     self.assertTrue(suggestions[0].compileDraft)
-                elif case["mode"] == "compile":
+                    continue
+                if case["mode"] == "compile":
                     options = suggest_keys(world, derive_cursor_context("{"))
                     instruction = finalize_selection(options, 0)
                     self.assertEqual(instruction["type"], "jsonl.instruction")
                     self.assertTrue(instruction["compileDraft"])
-                else:
-                    self.fail(f"unknown fixture mode {case['mode']}")
+                    continue
+                self.fail("unknown fixture mode")
 
 
 if __name__ == "__main__":
