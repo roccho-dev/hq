@@ -1,0 +1,61 @@
+{
+  "name": "hq protocol contract minimum",
+  "schemaJSONL": "{\"key\":\"status\",\"type\":\"enum\",\"required\":true,\"description\":\"current work state\",\"group\":\"work\",\"enum\":[\"done\",\"draft\",\"deferred\"]}\n{\"key\":\"title\",\"type\":\"string\",\"required\":true,\"description\":\"short task title\",\"group\":\"work\"}\n{\"key\":\"assignee\",\"type\":\"string\",\"required\":false,\"description\":\"owner or reviewer\",\"group\":\"work\"}\n{\"key\":\"priority\",\"type\":\"enum\",\"required\":false,\"description\":\"triage priority\",\"group\":\"work\",\"enum\":[\"high\",\"normal\",\"low\"]}\n",
+  "jsonSchema": {
+    "type": "object",
+    "required": ["status", "title"],
+    "properties": {
+      "status": {"type": "string", "enum": ["done", "draft", "deferred"], "description": "current work state"},
+      "title": {"type": "string", "description": "short task title"},
+      "assignee": {"type": "string", "description": "owner or reviewer"},
+      "priority": {"type": "string", "enum": ["high", "normal", "low"], "description": "triage priority"}
+    }
+  },
+  "rowsJSONL": "{\"status\":\"done\",\"title\":\"existing task\"}\n",
+  "cases": [
+    {
+      "name": "object-open-key-suggestions",
+      "mode": "complete",
+      "buffer": "{",
+      "cursor": 1,
+      "expectGoContextKind": "key",
+      "expectPythonContextState": "object_open",
+      "expectPartial": "",
+      "expectLabels": ["status", "title"],
+      "expectDraftQueue": "instruction.jsonl",
+      "expectDraftKey": "status"
+    },
+    {
+      "name": "partial-key-suggestions",
+      "mode": "complete",
+      "buffer": "{\"ti",
+      "cursor": 4,
+      "expectGoContextKind": "key",
+      "expectPythonContextState": "key",
+      "expectPartial": "ti",
+      "expectLabels": ["title"],
+      "expectDraftQueue": "instruction.jsonl",
+      "expectDraftKey": "title"
+    },
+    {
+      "name": "value-suggestions-with-compile-draft",
+      "mode": "complete",
+      "buffer": "{\"status\":\"d",
+      "cursor": 12,
+      "expectGoContextKind": "value",
+      "expectPythonContextState": "value",
+      "expectPartial": "d",
+      "expectLabels": ["deferred", "done", "draft"],
+      "expectDraftQueue": "instruction.jsonl",
+      "expectDraftKey": "status"
+    },
+    {
+      "name": "accept-finalizes-instruction",
+      "mode": "compile",
+      "buffer": "{\"status\":\"done\",\"title\":\"ship\"}",
+      "cursor": 32,
+      "expectAcceptedQueue": "instruction.jsonl",
+      "expectAcceptedInstructionOp": "queue.preview"
+    }
+  ]
+}
