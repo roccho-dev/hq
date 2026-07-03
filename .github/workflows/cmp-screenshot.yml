@@ -1,0 +1,19 @@
+name: Rust CMP screenshot
+
+on:
+  pull_request:
+
+jobs:
+  screenshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo build
+      - run: mkdir -p artifacts
+      - run: cargo run -- demo-autocomplete | tee artifacts/hq-rust-cmp-proof.txt
+      - run: python3 tools/render_terminal_preview_png.py --input artifacts/hq-rust-cmp-proof.txt --out artifacts/hq-rust-cmp-proof.png
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hq-rust-cmp-screenshot
+          path: artifacts
+          if-no-files-found: error
