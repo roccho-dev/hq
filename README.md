@@ -36,7 +36,7 @@ hq
   Linux/Windows terminal proof
 ```
 
-This PR only fixes the product identity and decision record. It does not rename the Go module, move Python files, add protocol fixtures, remove binaries, or rewrite proof workflows. Those are separate #13 slices.
+The first cleanup slice fixed the product identity and decision record. This rename slice makes `cmd/hq` and the Go module name the official product runtime shape. Python movement, protocol fixtures, binary cleanup, and proof-doc relocation remain separate #13 slices.
 
 ## What hq must do
 
@@ -52,15 +52,15 @@ This PR only fixes the product identity and decision record. It does not rename 
 
 ## Runtime and proof status
 
-The current tree still contains proof-era names and paths, including `cmd/hq-reflective`, `hq-reflective-poc`, proof docs, vendored/offline material, and generated binaries. They are not the desired final identity.
+The official Go command path is now `cmd/hq`, and the module name is `hq`.
 
-During #13 cleanup:
+During the remaining #13 cleanup:
 
-1. Go becomes the official `hq` runtime.
-2. Python is kept only when it serves tooling or reference checks.
-3. `spec/` becomes the correctness authority for protocol fixtures.
-4. `docs/proofs/` keeps proof knowledge outside the product root.
-5. Generated binaries move to CI/release artifacts unless explicitly justified.
+1. Python is kept only when it serves tooling or reference checks.
+2. `spec/` becomes the correctness authority for protocol fixtures.
+3. `docs/proofs/` keeps proof knowledge outside the product root.
+4. Generated binaries move to CI/release artifacts unless explicitly justified.
+5. Legacy proof paths may exist only as compatibility or evidence until the proof-doc/artifact cleanup slice removes or explains them.
 
 ## Reviewer readback
 
@@ -70,14 +70,16 @@ A reviewer should be able to say:
 
 If the repo no longer supports that sentence, the cleanup is not complete.
 
-## Build notes during transition
-
-Current proof-era commands may still use the old path until the rename PR lands:
+## Build
 
 ```bash
 go test ./...
-go build -o dist/hq-reflective-linux-amd64 ./cmd/hq-reflective
-GOOS=windows GOARCH=amd64 go build -o dist/hq-reflective-windows-amd64.exe ./cmd/hq-reflective
+go build -o dist/hq-linux-amd64 ./cmd/hq
+GOOS=windows GOARCH=amd64 go build -o dist/hq-windows-amd64.exe ./cmd/hq
 ```
 
-After the rename slice, the official command path should be `cmd/hq` and the binary should be `hq`.
+Or:
+
+```bash
+./scripts/check.sh
+```
