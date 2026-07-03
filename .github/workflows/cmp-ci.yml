@@ -1,0 +1,18 @@
+name: CMP CI
+
+on:
+  pull_request:
+
+jobs:
+  cmp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: mkdir -p artifacts
+      - run: gcc -std=c11 -O2 -Wall -Wextra -o artifacts/cmp_demo examples/cmp_demo.c
+      - run: artifacts/cmp_demo > artifacts/cmp_demo.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hq-cmp-proof
+          path: artifacts
+          if-no-files-found: error
