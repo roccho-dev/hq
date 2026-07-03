@@ -37,7 +37,7 @@ hq
   Linux/Windows terminal proof
 ```
 
-The first cleanup slice fixed the product identity and decision record. The second slice made `cmd/hq` and the Go module name the official product runtime shape. The third slice moved Python into `tools/hq_reference`. The fourth slice added `spec/fixtures` and protocol-contract CI. This slice adds artifact-source boundaries for `dist/`. Proof-doc relocation remains a separate #13 slice.
+The first cleanup slice fixed the product identity and decision record. The second slice made `cmd/hq` and the Go module name the official product runtime shape. The third slice moved Python into `tools/hq_reference`. The fourth slice added `spec/fixtures` and protocol-contract CI. The fifth slice added artifact-source boundaries for `dist/`. This slice moves proof notes under `docs/proofs/` and documents the terminal proof marker contract.
 
 ## What hq must do
 
@@ -68,12 +68,14 @@ go test ./internal/hq -run TestProtocolFixtureContract -v
 PYTHONPATH=. python3 -m unittest tests/test_python_reference_protocol_fixture.py
 ```
 
-`dist/` is not source authority. New generated binaries are ignored by default. Any transitional committed proof artifact in `dist/` must be explained by `dist/MANIFEST.md` until PR6 replaces or moves the proof evidence.
+Proof notes live under:
 
-During the remaining #13 cleanup:
+```text
+docs/proofs/reflective-go.md
+docs/proofs/interactive-tab.md
+```
 
-1. `docs/proofs/` keeps proof knowledge outside the product root.
-2. Legacy proof paths may exist only as compatibility or evidence until the proof-doc/artifact cleanup slice removes or explains them.
+`dist/` is not source authority. New generated binaries are ignored by default. Any transitional committed proof artifact in `dist/` must be explained by `dist/MANIFEST.md` until replaced or removed.
 
 ## Reviewer readback
 
