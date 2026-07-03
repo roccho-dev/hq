@@ -1,6 +1,6 @@
 import unittest
 
-from hq import JsonlWorld, derive_cursor_context, diagnose_keys, suggest_keys, suggest_values
+from tools.hq_reference import JsonlWorld, derive_cursor_context, diagnose_keys, suggest_keys, suggest_values
 
 SCHEMA = {
     "type": "object",
