@@ -63,8 +63,8 @@ jobs:
       - name: Install Windows terminal proof dependency
         shell: pwsh
         run: |
-          python -m pip install --disable-pip-version-check --upgrade pip
-          python -m pip install --disable-pip-version-check wexpect
+          python -m pip install --disable-pip-version-check --quiet --upgrade pip
+          python -m pip install --disable-pip-version-check --quiet wexpect
 
       - name: Build Windows proof binary
         shell: pwsh
@@ -76,7 +76,7 @@ jobs:
       - name: Prove Windows interactive Tab completion
         shell: pwsh
         run: |
-          python scripts/windows-tab-proof.py `
+          python scripts/windows-tab-proof-v2.py `
             .\artifacts\hq-reflective-windows-amd64.exe `
             artifacts\interactive-tab-proof-windows.txt
 
@@ -92,9 +92,10 @@ jobs:
           Select-String -Path artifacts\interactive-tab-proof-windows.txt -SimpleMatch '"tabProofC"'
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: hq-reflective-interactive-tab-proof-windows
           path: |
             artifacts/hq-reflective-windows-amd64.exe
             artifacts/interactive-tab-proof-windows.txt
-          if-no-files-found: error
+          if-no-files-found: warn
