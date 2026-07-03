@@ -1,9 +1,9 @@
 import json
 import unittest
 
-from hq.core import JsonlWorld, derive_cursor_context
-from hq.finalize import append_instruction_jsonl, finalize_selection
-from hq.suggestion import suggest_keys
+from tools.hq_reference.core import JsonlWorld, derive_cursor_context
+from tools.hq_reference.finalize import append_instruction_jsonl, finalize_selection
+from tools.hq_reference.suggestion import suggest_keys
 
 SCHEMA = {
     "type": "object",
