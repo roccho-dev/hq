@@ -1,0 +1,2 @@
+{"source_ref":"adrs.projected:fixed:purpose-1","kind":"purpose","key":"purpose","title":"Build reusable hq adapter boundary","body":"Fixed projected source row","payload":{"required":true,"group":"purpose"}}
+{"source_ref":"adrs.projected:fixed:proposal-3","kind":"proposal","key":"proposal","title":"Candidate proposal surface","body":"Projection input only","payload":{"required":false,"group":"proposal"}}
