@@ -8,7 +8,7 @@ import (
 	"io"
 	"strings"
 
-	"hq-reflective-poc/internal/core"
+	"hq/internal/core"
 )
 
 // DefaultSchemaJSONL is current proof-era adapter data. It is not core logic.
