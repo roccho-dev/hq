@@ -4,7 +4,7 @@ Refs: #9
 
 ## Status
 
-Proposal support artifact only. This does not claim that the runtime REPL implementation is complete.
+Proposal support artifact plus minimal Rust implementation. This does not claim that the full interactive REPL is complete.
 
 ## Purpose
 
@@ -78,16 +78,36 @@ Minimum accepted behavior:
 4. Accepting the draft emits a durable `queue.create` JSONL instruction.
 5. Unaccepted candidates do not mutate the durable queue.
 
+## Minimal Rust implementation included here
+
+The Rust binary implements a small, real path for:
+
+```text
+hq suggest --buffer <json-fragment> [--query <text>]
+hq accept  --buffer <json-fragment> [--query <text>] [--index <n>]
+hq demo-autocomplete
+```
+
+It includes:
+
+1. cursor context detection for key/value locations,
+2. schema-like key and enum-value suggestions,
+3. matcher-ranked fuzzy suggestions,
+4. compileDraft JSON in each candidate,
+5. queue.create JSONL output on accept,
+6. Rust tests for fuzzy match, key suggestions, value suggestions, and queue.create output.
+
 ## What this PR intentionally does not implement
 
-This proposal branch should not pretend to finish the runtime REPL. It only adds:
+This proposal branch should not pretend to finish the full interactive REPL. It does not yet implement:
 
-1. the proposal route,
-2. a minimal Rust binary package,
-3. Windows Rust artifact CI,
-4. tag-time GitHub Release wiring.
+1. an interactive line editor,
+2. inline ghost rendering,
+3. mini queue pane rendering,
+4. persistent queue-draft editing,
+5. ctx dispatch execution.
 
-Runtime implementation should follow in issue-linked PRs.
+Those should follow in issue-linked PRs.
 
 ## Release path
 
@@ -101,7 +121,7 @@ hq-windows-rust.zip
 
 This intentionally does not include the Python package or a Python wrapper.
 
-The included binary proves only the Rust Windows release path. It does not claim that runtime REPL completion is complete.
+The included binary is now more than a release-path placeholder: it contains the minimal Rust suggestion/accept implementation above. It still does not claim that the full interactive REPL is complete.
 
 ## Merge readiness
 
@@ -110,4 +130,4 @@ This proposal becomes merge-ready when:
 1. Linux CI remains green.
 2. Windows Rust artifact workflow builds on pull request.
 3. Tag trigger can create or update a GitHub Release asset.
-4. PR body clearly states that runtime REPL completion is still future work.
+4. PR body clearly states that full interactive REPL completion is still future work.
