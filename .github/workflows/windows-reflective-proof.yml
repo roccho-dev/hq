@@ -1,0 +1,80 @@
+name: Windows reflective proof
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "proposal/**"
+
+jobs:
+  reflective-proof:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+
+      - name: Test Go reflective implementation
+        shell: pwsh
+        run: go test ./...
+
+      - name: Build Windows proof binary
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          go build -o artifacts/hq-reflective-windows-amd64.exe ./cmd/hq-reflective
+
+      - name: Run Windows proof smoke
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+
+          $completeArg = '{"op":q'
+          $contextArg = '{"'
+          $draftArg = '{"op":"queue.create","target":"ctx","payload":{"path":"demo.jsonl"}}'
+
+          & .\artifacts\hq-reflective-windows-amd64.exe --complete $completeArg | Tee-Object -FilePath artifacts\complete.json
+          & .\artifacts\hq-reflective-windows-amd64.exe --context $contextArg | Tee-Object -FilePath artifacts\context.json
+          & .\artifacts\hq-reflective-windows-amd64.exe --draft $draftArg | Tee-Object -FilePath artifacts\draft.json
+
+          $complete = Get-Content artifacts\complete.json -Raw | ConvertFrom-Json
+          if (-not ($complete | Where-Object { $_.label -eq "queue.create" })) {
+            throw "queue.create completion was not present"
+          }
+          if (-not ($complete | Where-Object { $_.compileDraft.queue -eq "instruction.jsonl" })) {
+            throw "compileDraft queue proof was not present"
+          }
+
+          @(
+            "PS> .\artifacts\hq-reflective-windows-amd64.exe --complete '$completeArg'",
+            (Get-Content artifacts\complete.json -Raw),
+            "",
+            "PS> .\artifacts\hq-reflective-windows-amd64.exe --context '$contextArg'",
+            (Get-Content artifacts\context.json -Raw),
+            "",
+            "PS> .\artifacts\hq-reflective-windows-amd64.exe --draft '$draftArg'",
+            (Get-Content artifacts\draft.json -Raw)
+          ) -join "`r`n" | Set-Content -Encoding UTF8 artifacts\terminal-proof.txt
+
+      - name: Render terminal proof screenshot
+        shell: pwsh
+        run: |
+          .\scripts\render-terminal-proof.ps1 `
+            -InputPath artifacts\terminal-proof.txt `
+            -OutputPath artifacts\terminal-proof.png
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hq-reflective-windows-proof
+          path: |
+            artifacts/hq-reflective-windows-amd64.exe
+            artifacts/complete.json
+            artifacts/context.json
+            artifacts/draft.json
+            artifacts/terminal-proof.txt
+            artifacts/terminal-proof.png
+          if-no-files-found: error
