@@ -1,10 +1,10 @@
-# Proposal: cmp-like matcher REPL and Windows release path
+# Proposal: cmp-like matcher REPL and Rust Windows release path
 
 Refs: #9
 
 ## Status
 
-Proposal support artifact only. This does not claim that the REPL implementation is complete.
+Proposal support artifact only. This does not claim that the runtime REPL implementation is complete.
 
 ## Purpose
 
@@ -17,7 +17,8 @@ This proposal narrows the next implementation route:
 3. Use a matcher-only fuzzy scorer for ranking suggestions.
 4. Do not use fzf as the default completion UI.
 5. Keep fzf-style deep picker behavior optional.
-6. Add CI coverage for Windows packaging and tag-time GitHub Release upload.
+6. Build a Windows Rust artifact in CI.
+7. Publish the Windows Rust artifact to GitHub Releases on tag pushes.
 
 ## UX decision
 
@@ -82,37 +83,31 @@ Minimum accepted behavior:
 This proposal branch should not pretend to finish the runtime REPL. It only adds:
 
 1. the proposal route,
-2. Windows package CI,
-3. tag-time GitHub Release wiring.
+2. a minimal Rust binary package,
+3. Windows Rust artifact CI,
+4. tag-time GitHub Release wiring.
 
 Runtime implementation should follow in issue-linked PRs.
 
 ## Release path
 
-For now, the Windows release artifact is a no-extra-dependencies zip package:
+For now, the Windows release artifact is a Rust-built binary zip:
 
 ```text
-hq-windows.zip
-  hq/
-  README.md
-  hq.cmd
-  hq-terminal-autocomplete.txt
+hq-windows-rust.zip
+  hq.exe
+  README.txt
 ```
 
-`hq.cmd` delegates to:
+This intentionally does not include the Python package or a Python wrapper.
 
-```text
-python -m hq %*
-```
-
-This is intentionally not an exe yet. Exe packaging can be proposed later after the REPL runtime boundary is stable.
+The included binary proves only the Rust Windows release path. It does not claim that runtime REPL completion is complete.
 
 ## Merge readiness
 
 This proposal becomes merge-ready when:
 
 1. Linux CI remains green.
-2. Windows package workflow builds on pull request.
+2. Windows Rust artifact workflow builds on pull request.
 3. Tag trigger can create or update a GitHub Release asset.
 4. PR body clearly states that runtime REPL completion is still future work.
-
