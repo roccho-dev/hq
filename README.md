@@ -17,6 +17,7 @@ JsonlWorld + CursorContext
 |---|---|
 | Product | `hq`, a terminal runtime for JSONL-aware autocomplete compilation |
 | Protocol | JSONL world, cursor context, suggestion, compileDraft, acceptance, instruction |
+| Correctness authority | `spec/fixtures/` protocol fixtures |
 | Official runtime direction | Go terminal runtime |
 | Python | Tooling only under `tools/hq_reference`: preview rendering, fixture checks, migration helpers, reference checks |
 | Proof | Linux and Windows terminal Tab proof, stored as CI artifacts and documented under `docs/proofs/` |
@@ -36,7 +37,7 @@ hq
   Linux/Windows terminal proof
 ```
 
-The first cleanup slice fixed the product identity and decision record. The second slice made `cmd/hq` and the Go module name the official product runtime shape. This slice moves Python into `tools/hq_reference` so it is reference and preview tooling, not product runtime authority. Protocol fixtures, binary cleanup, and proof-doc relocation remain separate #13 slices.
+The first cleanup slice fixed the product identity and decision record. The second slice made `cmd/hq` and the Go module name the official product runtime shape. The third slice moved Python into `tools/hq_reference`. This slice adds `spec/fixtures` and protocol-contract CI so correctness is fixture-based. Binary cleanup and proof-doc relocation remain separate #13 slices.
 
 ## What hq must do
 
@@ -60,13 +61,18 @@ Python reference tooling lives under `tools/hq_reference` and is invoked as:
 PYTHONPATH=. python3 -m tools.hq_reference demo-autocomplete
 ```
 
+Protocol fixtures live under `spec/fixtures` and are checked by:
+
+```bash
+go test ./internal/hq -run TestProtocolFixtureContract -v
+PYTHONPATH=. python3 -m unittest tests/test_python_reference_protocol_fixture.py
+```
+
 During the remaining #13 cleanup:
 
-1. `spec/` becomes the correctness authority for protocol fixtures.
-2. Python tooling either consumes `spec/` or stays clearly outside semantic authority.
-3. `docs/proofs/` keeps proof knowledge outside the product root.
-4. Generated binaries move to CI/release artifacts unless explicitly justified.
-5. Legacy proof paths may exist only as compatibility or evidence until the proof-doc/artifact cleanup slice removes or explains them.
+1. `docs/proofs/` keeps proof knowledge outside the product root.
+2. Generated binaries move to CI/release artifacts unless explicitly justified.
+3. Legacy proof paths may exist only as compatibility or evidence until the proof-doc/artifact cleanup slice removes or explains them.
 
 ## Reviewer readback
 
