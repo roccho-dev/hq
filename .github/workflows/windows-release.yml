@@ -1,4 +1,4 @@
-name: Windows package and release
+name: Rust Windows build and release
 
 on:
   pull_request:
@@ -10,42 +10,47 @@ permissions:
   contents: read
 
 jobs:
-  windows-package:
-    name: Build Windows package
+  windows-rust:
+    name: Build Rust Windows artifact
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+      - name: Show Rust toolchain
+        run: rustc --version && cargo --version
 
-      - name: Run unit tests on Windows
-        run: python -m unittest discover -s tests
+      - name: Run Rust tests
+        run: cargo test
 
-      - name: Build Windows zip package
+      - name: Build Rust release binary
+        run: cargo build --release
+
+      - name: Package Rust artifact only
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          New-Item -ItemType Directory -Force dist\hq-windows | Out-Null
-          Copy-Item -Recurse hq dist\hq-windows\hq
-          Copy-Item README.md dist\hq-windows\README.md
+          New-Item -ItemType Directory -Force dist\hq-windows-rust | Out-Null
+          Copy-Item target\release\hq.exe dist\hq-windows-rust\hq.exe
           @'
-          @echo off
-          python -m hq %*
-          '@ | Set-Content -NoNewline -Encoding ascii dist\hq-windows\hq.cmd
-          python -m hq demo-autocomplete > dist\hq-windows\hq-terminal-autocomplete.txt
-          Compress-Archive -Path dist\hq-windows\* -DestinationPath dist\hq-windows.zip -Force
+          hq Windows Rust artifact
+
+          This package is built by GitHub Actions from the proposal PR.
+          It contains only the Rust-built hq.exe plus this README.
+
+          This artifact proves the Rust Windows release path only.
+          It does not claim that runtime REPL completion is complete.
+          '@ | Set-Content -NoNewline -Encoding utf8 dist\hq-windows-rust\README.txt
+          Compress-Archive -Path dist\hq-windows-rust\* -DestinationPath dist\hq-windows-rust.zip -Force
 
       - uses: actions/upload-artifact@v4
         with:
-          name: hq-windows
-          path: dist/hq-windows.zip
+          name: hq-windows-rust
+          path: dist/hq-windows-rust.zip
           if-no-files-found: error
 
   github-release:
     name: Publish GitHub Release asset
-    needs: windows-package
+    needs: windows-rust
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
@@ -53,7 +58,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: hq-windows
+          name: hq-windows-rust
           path: dist
 
       - name: Create or update release asset
@@ -63,7 +68,7 @@ jobs:
         run: |
           set -euo pipefail
           if gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG_NAME" dist/hq-windows.zip --repo "$GITHUB_REPOSITORY" --clobber
+            gh release upload "$TAG_NAME" dist/hq-windows-rust.zip --repo "$GITHUB_REPOSITORY" --clobber
           else
-            gh release create "$TAG_NAME" dist/hq-windows.zip --repo "$GITHUB_REPOSITORY" --title "$TAG_NAME" --notes "hq Windows package"
+            gh release create "$TAG_NAME" dist/hq-windows-rust.zip --repo "$GITHUB_REPOSITORY" --title "$TAG_NAME" --notes "hq Windows Rust artifact"
           fi
