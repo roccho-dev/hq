@@ -25,7 +25,7 @@ jobs:
 
       - name: Prove interactive Tab completion through PTY
         run: |
-          python3 scripts/pty-tab-proof.py \
+          python3 scripts/pty-tab-proof-v2.py \
             ./artifacts/hq-reflective-linux-amd64 \
             artifacts/interactive-tab-proof.txt
 
@@ -34,9 +34,10 @@ jobs:
           grep -F 'SENT_KEYS: {" + <TAB>' artifacts/interactive-tab-proof.txt
           grep -F 'SENT_BYTES_HEX: 7b2209' artifacts/interactive-tab-proof.txt
           grep -F 'PTY_SESSION: real pseudo terminal' artifacts/interactive-tab-proof.txt
-          grep -F '"op"' artifacts/interactive-tab-proof.txt
-          grep -F '"target"' artifacts/interactive-tab-proof.txt
-          grep -F '"payload"' artifacts/interactive-tab-proof.txt
+          grep -F 'PROOF_SCHEMA: temporary tabProofA/tabProofB/tabProofC keys not present in seeded history' artifacts/interactive-tab-proof.txt
+          grep -F '"tabProofA"' artifacts/interactive-tab-proof.txt
+          grep -F '"tabProofB"' artifacts/interactive-tab-proof.txt
+          grep -F '"tabProofC"' artifacts/interactive-tab-proof.txt
 
       - uses: actions/upload-artifact@v4
         with:
