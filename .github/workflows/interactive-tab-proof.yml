@@ -64,7 +64,7 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install --disable-pip-version-check --quiet --upgrade pip
-          python -m pip install --disable-pip-version-check --quiet wexpect
+          python -m pip install --disable-pip-version-check --quiet setuptools wexpect
 
       - name: Build Windows proof binary
         shell: pwsh
