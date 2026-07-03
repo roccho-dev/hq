@@ -17,26 +17,27 @@ JsonlWorld + CursorContext
 |---|---|
 | Product | `hq`, a terminal runtime for JSONL-aware autocomplete compilation |
 | Protocol | JSONL world, cursor context, suggestion, compileDraft, acceptance, instruction |
+| Correctness authority | `spec/fixtures/` contract rows and CI checks |
 | Official runtime direction | Go terminal runtime |
 | Python | Tooling only: preview rendering, fixture checks, migration helpers, reference checks |
-| Proof | Linux and Windows terminal Tab proof, stored as CI artifacts and documented under `docs/proofs/` |
-| Generated binaries | CI or release artifacts, not source authority |
+| Evidence | CI status, workflow artifacts, `docs/evidence/`, `docs/review.md`, and `PROOF.md` pointer note |
+| Generated outputs | Review evidence only, not source authority |
 
-The repository should read as a product with proofs, not as a pile of POCs.
+The repository should read as a product with evidence, not as a pile of POCs.
 
-## Current cleanup path
+## Completed #13 cleanup path
 
-Issue #13 owns the cleanup from the current proof-heavy tree into this final shape:
+Issue #13 normalizes this repo into:
 
 ```text
 hq
   protocol-first
   Go runtime
   Python tooling
-  Linux/Windows terminal proof
+  Linux/Windows terminal checks
 ```
 
-The first cleanup slice fixed the product identity and decision record. This rename slice makes `cmd/hq` and the Go module name the official product runtime shape. Python movement, protocol fixtures, binary cleanup, and proof-doc relocation remain separate #13 slices.
+The cleanup path has established product identity, Go module/command ownership, Python tooling metadata, protocol fixture rows, generated-output boundary notes, and review/evidence notes.
 
 ## What hq must do
 
@@ -48,25 +49,25 @@ The first cleanup slice fixed the product identity and decision record. This ren
 | Candidate is accepted | Only that accepted candidate becomes an instruction |
 | Candidate is not accepted | Nothing is written to the queue |
 | Schema changes | Suggestions change without hardcoding business keys in product code |
-| Linux/Windows Tab proof runs | Literal Tab operation remains guarded by CI evidence |
+| Linux/Windows terminal checks run | Literal Tab operation remains guarded by CI evidence |
 
-## Runtime and proof status
+## Runtime and evidence status
 
-The official Go command path is now `cmd/hq`, and the module name is `hq`.
+The official Go command path is `cmd/hq`, and the module name is `hq`.
 
-During the remaining #13 cleanup:
+Python is labeled as tooling by `pyproject.toml` and `tools/README.md`.
 
-1. Python is kept only when it serves tooling or reference checks.
-2. `spec/` becomes the correctness authority for protocol fixtures.
-3. `docs/proofs/` keeps proof knowledge outside the product root.
-4. Generated binaries move to CI/release artifacts unless explicitly justified.
-5. Legacy proof paths may exist only as compatibility or evidence until the proof-doc/artifact cleanup slice removes or explains them.
+Protocol contract rows live under `spec/fixtures/` and are checked by CI.
+
+Generated outputs are review evidence only. See `docs/boundary.md`.
+
+Review notes live under `docs/review.md` and `docs/evidence/README.md`. Root `PROOF.md` is now only a pointer note.
 
 ## Reviewer readback
 
 A reviewer should be able to say:
 
-> `hq` is a Go terminal runtime for JSONL-aware autocomplete compilation. Its correctness is defined by protocol fixtures. Python is tooling. Linux and Windows terminal Tab UX are protected by interactive proof CI. Generated binaries and proof captures are artifacts, not source authority.
+> `hq` is a Go terminal runtime for JSONL-aware autocomplete compilation. Its correctness is defined by protocol fixtures. Python is tooling. Linux and Windows terminal UX are protected by CI evidence. Generated outputs are evidence, not source authority.
 
 If the repo no longer supports that sentence, the cleanup is not complete.
 
