@@ -1,18 +1,24 @@
-name: CMP CI
+name: CMP screenshot proof
 
 on:
   pull_request:
 
 jobs:
-  cmp:
+  cmp-screenshot:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: cargo test
       - run: mkdir -p artifacts
-      - run: gcc -std=c11 -O2 -Wall -Wextra -o artifacts/cmp_demo examples/cmp_demo.c
-      - run: artifacts/cmp_demo > artifacts/cmp_demo.txt
+      - run: cargo run -- demo-autocomplete > artifacts/hq-rust-cmp-proof.txt
+      - run: PYTHONPATH=. python3 tools/render_terminal_preview_png.py --input artifacts/hq-rust-cmp-proof.txt --out artifacts/hq-rust-cmp-proof.png
       - uses: actions/upload-artifact@v4
         with:
-          name: hq-cmp-proof
-          path: artifacts
+          name: hq-cmp-proof-screenshot
+          path: |
+            artifacts/hq-rust-cmp-proof.txt
+            artifacts/hq-rust-cmp-proof.png
           if-no-files-found: error
