@@ -8,7 +8,7 @@ on:
       - "proposal/**"
 
 jobs:
-  pty-tab-proof:
+  linux-pty-tab-proof:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,26 +23,80 @@ jobs:
           go test ./...
           go build -o artifacts/hq-reflective-linux-amd64 ./cmd/hq-reflective
 
-      - name: Prove interactive Tab completion through PTY
+      - name: Prove Linux interactive Tab completion through PTY
         run: |
           python3 scripts/pty-tab-proof-v2.py \
             ./artifacts/hq-reflective-linux-amd64 \
-            artifacts/interactive-tab-proof.txt
+            artifacts/interactive-tab-proof-linux.txt
 
-      - name: Require literal Tab proof markers
+      - name: Require Linux literal Tab proof markers
         run: |
-          grep -F 'SENT_KEYS: {" + <TAB>' artifacts/interactive-tab-proof.txt
-          grep -F 'SENT_BYTES_HEX: 7b2209' artifacts/interactive-tab-proof.txt
-          grep -F 'PTY_SESSION: real pseudo terminal' artifacts/interactive-tab-proof.txt
-          grep -F 'PROOF_SCHEMA: temporary tabProofA/tabProofB/tabProofC keys not present in seeded history' artifacts/interactive-tab-proof.txt
-          grep -F '"tabProofA"' artifacts/interactive-tab-proof.txt
-          grep -F '"tabProofB"' artifacts/interactive-tab-proof.txt
-          grep -F '"tabProofC"' artifacts/interactive-tab-proof.txt
+          grep -F 'SENT_KEYS: {" + <TAB>' artifacts/interactive-tab-proof-linux.txt
+          grep -F 'SENT_BYTES_HEX: 7b2209' artifacts/interactive-tab-proof-linux.txt
+          grep -F 'PTY_SESSION: real pseudo terminal' artifacts/interactive-tab-proof-linux.txt
+          grep -F 'PROOF_SCHEMA: temporary tabProofA/tabProofB/tabProofC keys not present in seeded history' artifacts/interactive-tab-proof-linux.txt
+          grep -F '"tabProofA"' artifacts/interactive-tab-proof-linux.txt
+          grep -F '"tabProofB"' artifacts/interactive-tab-proof-linux.txt
+          grep -F '"tabProofC"' artifacts/interactive-tab-proof-linux.txt
 
       - uses: actions/upload-artifact@v4
         with:
-          name: hq-reflective-interactive-tab-proof
+          name: hq-reflective-interactive-tab-proof-linux
           path: |
             artifacts/hq-reflective-linux-amd64
-            artifacts/interactive-tab-proof.txt
+            artifacts/interactive-tab-proof-linux.txt
           if-no-files-found: error
+
+  windows-tab-proof:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install Windows terminal proof dependency
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check --quiet --upgrade pip
+          python -m pip install --disable-pip-version-check --quiet "setuptools==80.9.0" wexpect
+          python -c "import pkg_resources; import wexpect; print('windows terminal proof deps ok')"
+
+      - name: Build Windows proof binary
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          go test ./...
+          go build -o artifacts/hq-reflective-windows-amd64.exe ./cmd/hq-reflective
+
+      - name: Prove Windows interactive Tab completion
+        shell: pwsh
+        run: |
+          python scripts/windows-tab-proof-v2.py `
+            .\artifacts\hq-reflective-windows-amd64.exe `
+            artifacts\interactive-tab-proof-windows.txt
+
+      - name: Require Windows literal Tab proof markers
+        shell: pwsh
+        run: |
+          Select-String -Path artifacts\interactive-tab-proof-windows.txt -SimpleMatch 'SENT_KEYS: {" + <TAB>'
+          Select-String -Path artifacts\interactive-tab-proof-windows.txt -SimpleMatch 'SENT_BYTES_HEX: 7b2209'
+          Select-String -Path artifacts\interactive-tab-proof-windows.txt -SimpleMatch 'WINDOWS_TERMINAL_SESSION: wexpect/winpty'
+          Select-String -Path artifacts\interactive-tab-proof-windows.txt -SimpleMatch 'PROOF_SCHEMA: temporary tabProofA/tabProofB/tabProofC keys not present in seeded history'
+          Select-String -Path artifacts\interactive-tab-proof-windows.txt -SimpleMatch '"tabProofA"'
+          Select-String -Path artifacts\interactive-tab-proof-windows.txt -SimpleMatch '"tabProofB"'
+          Select-String -Path artifacts\interactive-tab-proof-windows.txt -SimpleMatch '"tabProofC"'
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hq-reflective-interactive-tab-proof-windows
+          path: |
+            artifacts/hq-reflective-windows-amd64.exe
+            artifacts/interactive-tab-proof-windows.txt
+          if-no-files-found: warn
