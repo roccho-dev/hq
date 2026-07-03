@@ -3,8 +3,8 @@ package hq
 import (
 	"io"
 
-	"hq-reflective-poc/internal/adapter/current"
-	"hq-reflective-poc/internal/core"
+	"hq/internal/adapter/current"
+	"hq/internal/core"
 )
 
 // SchemaKey is the canonical core protocol key type.
