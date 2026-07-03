@@ -1,6 +1,6 @@
 import unittest
 
-from hq.core import JsonlWorld, derive_cursor_context
+from tools.hq_reference.core import JsonlWorld, derive_cursor_context
 
 SCHEMA = {
     "type": "object",
