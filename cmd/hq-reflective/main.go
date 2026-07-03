@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"hq-reflective-poc/internal/hq"
+	"hq/internal/hq"
 
 	readline "github.com/reeflective/readline"
 	"github.com/reeflective/readline/inputrc"
