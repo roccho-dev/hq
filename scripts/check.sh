@@ -2,9 +2,9 @@
 set -euo pipefail
 
 go test ./...
-go build -o dist/hq-reflective-linux-amd64 ./cmd/hq-reflective
-GOOS=windows GOARCH=amd64 go build -o dist/hq-reflective-windows-amd64.exe ./cmd/hq-reflective
-./dist/hq-reflective-linux-amd64 --complete '{"op":q' >/tmp/hq-reflective-complete.json
-./dist/hq-reflective-linux-amd64 --context '{"' >/tmp/hq-reflective-context.json
-./dist/hq-reflective-linux-amd64 --draft '{"op":"queue.create","target":"ctx","payload":{"path":"demo.jsonl"}}' >/tmp/hq-reflective-draft.json
+go build -o dist/hq-linux-amd64 ./cmd/hq
+GOOS=windows GOARCH=amd64 go build -o dist/hq-windows-amd64.exe ./cmd/hq
+./dist/hq-linux-amd64 --complete '{"op":q' >/tmp/hq-complete.json
+./dist/hq-linux-amd64 --context '{"' >/tmp/hq-context.json
+./dist/hq-linux-amd64 --draft '{"op":"queue.create","target":"ctx","payload":{"path":"demo.jsonl"}}' >/tmp/hq-draft.json
 printf 'ok\n'
