@@ -1,4 +1,4 @@
-name: Rust CMP screenshot
+name: Nucleo CMP screenshot proof
 
 on:
   pull_request:
@@ -8,12 +8,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: cargo build
-      - run: mkdir -p artifacts
-      - run: cargo run -- demo-autocomplete | tee artifacts/hq-rust-cmp-proof.txt
-      - run: python3 tools/render_terminal_preview_png.py --input artifacts/hq-rust-cmp-proof.txt --out artifacts/hq-rust-cmp-proof.png
+      - run: mkdir -p artifacts/proof/src artifacts/proof/frames artifacts/proof/screens
+      - run: cat proofs/nucleo-matcher-cmp/src/*.b64.part* | base64 -d > artifacts/proof/src/hq_fuzzy_cmp_demo.c
+      - run: gcc -std=c11 -O2 -Wall -Wextra -o artifacts/proof/hq_fuzzy_cmp_demo artifacts/proof/src/hq_fuzzy_cmp_demo.c
+      - run: artifacts/proof/hq_fuzzy_cmp_demo key-aid > artifacts/proof/frames/01_key_aid.txt
+      - run: artifacts/proof/hq_fuzzy_cmp_demo val-ae > artifacts/proof/frames/02_value_aex.txt
+      - run: artifacts/proof/hq_fuzzy_cmp_demo act-arcx > artifacts/proof/frames/03_action_arcx.txt
+      - run: artifacts/proof/hq_fuzzy_cmp_demo host-nxsh > artifacts/proof/frames/04_host_nxsh.txt
+      - run: artifacts/proof/hq_fuzzy_cmp_demo tool-rg > artifacts/proof/frames/05_tool_rg.txt
+      - run: artifacts/proof/hq_fuzzy_cmp_demo queue-draft > artifacts/proof/frames/06_queue_draft.txt
+      - run: artifacts/proof/hq_fuzzy_cmp_demo ambiguous > artifacts/proof/frames/07_ambiguous_fi.txt
+      - run: artifacts/proof/hq_fuzzy_cmp_demo none > artifacts/proof/frames/08_none.txt
+      - run: artifacts/proof/hq_fuzzy_cmp_demo multi-token > artifacts/proof/frames/09_multi_token.txt
+      - run: artifacts/proof/hq_fuzzy_cmp_demo queue-edit > artifacts/proof/frames/10_queue_edit.txt
+      - run: for f in artifacts/proof/frames/*.txt; do b=$(basename "$f" .txt); python3 tools/render_terminal_preview_png.py --input "$f" --out "artifacts/proof/screens/${b}.png"; done
+      - run: python3 tools/render_terminal_preview_png.py --input artifacts/proof/frames/06_queue_draft.txt --out artifacts/proof/screens/00_contact_sheet.png
       - uses: actions/upload-artifact@v4
         with:
-          name: hq-rust-cmp-screenshot
-          path: artifacts
+          name: hq-nucleo-cmp-proof-screens
+          path: artifacts/proof
           if-no-files-found: error
