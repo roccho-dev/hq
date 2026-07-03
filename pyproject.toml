@@ -1,5 +1,5 @@
 [project]
-name = "hq-jsonl-autocomplete"
+name = "hq-python-reference-tools"
 version = "0.1.0"
-description = "Small JSONL-aware autocomplete compiler"
+description = "Reference and preview tooling for the hq JSONL autocomplete protocol"
 requires-python = ">=3.11"
