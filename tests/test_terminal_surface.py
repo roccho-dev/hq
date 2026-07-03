@@ -1,6 +1,6 @@
 import unittest
 
-from hq.terminal_surface import autocomplete_payload, choose_payload
+from tools.hq_reference.terminal_surface import autocomplete_payload, choose_payload
 
 SCHEMA = {
     "type": "object",
