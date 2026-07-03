@@ -1,6 +1,6 @@
 package boundary
 
-import "hq-reflective-poc/internal/core"
+import "hq/internal/core"
 
 type WorldReader interface {
 	ReadWorld() (*core.JsonlWorld, error)
