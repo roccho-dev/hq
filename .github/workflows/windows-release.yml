@@ -37,8 +37,13 @@ jobs:
           This package is built by GitHub Actions from the proposal PR.
           It contains only the Rust-built hq.exe plus this README.
 
-          This artifact proves the Rust Windows release path only.
-          It does not claim that runtime REPL completion is complete.
+          The binary includes a minimal Rust implementation for:
+          - hq suggest --buffer <json-fragment> [--query <text>]
+          - hq accept  --buffer <json-fragment> [--query <text>] [--index <n>]
+          - hq demo-autocomplete
+
+          It supports matcher-ranked suggestions and queue.create JSONL output.
+          It does not claim that the full interactive REPL is complete.
           '@ | Set-Content -NoNewline -Encoding utf8 dist\hq-windows-rust\README.txt
           Compress-Archive -Path dist\hq-windows-rust\* -DestinationPath dist\hq-windows-rust.zip -Force
 
