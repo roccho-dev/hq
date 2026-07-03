@@ -14,7 +14,7 @@ class TerminalPreviewPngArtifactTests(unittest.TestCase):
             stdout_file = Path(tmpdir) / "terminal.txt"
             png_file = Path(tmpdir) / "preview.png"
             completed = subprocess.run(
-                [sys.executable, "-m", "hq", "demo-autocomplete"],
+                [sys.executable, "-m", "tools.hq_reference", "demo-autocomplete"],
                 check=True,
                 env=env,
                 text=True,
