@@ -37,7 +37,7 @@ def save(path: Path, status: str, sent: str, expected: list[str], transcript: st
         "--- END_CLEAN_TERMINAL_TRANSCRIPT ---",
         "",
     ]), encoding="utf-8")
-    print(path.read_text(encoding="utf-8"))
+    print(f"windows tab proof {status}: {path}")
 
 
 def main() -> int:
