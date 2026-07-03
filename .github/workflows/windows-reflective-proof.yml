@@ -50,6 +50,8 @@ jobs:
           }
 
           @(
+            "actual Windows CI run: .\artifacts\hq-reflective-windows-amd64.exe built in this workflow",
+            "",
             "PS> .\artifacts\hq-reflective-windows-amd64.exe --complete '$completeArg'",
             (Get-Content artifacts\complete.json -Raw),
             "",
@@ -58,23 +60,23 @@ jobs:
             "",
             "PS> .\artifacts\hq-reflective-windows-amd64.exe --draft '$draftArg'",
             (Get-Content artifacts\draft.json -Raw)
-          ) -join "`r`n" | Set-Content -Encoding UTF8 artifacts\terminal-proof.txt
+          ) -join "`r`n" | Set-Content -Encoding UTF8 artifacts\actual-run-terminal-proof.txt
 
-      - name: Render terminal proof screenshot
+      - name: Render actual run terminal screenshot
         shell: pwsh
         run: |
           .\scripts\render-terminal-proof.ps1 `
-            -InputPath artifacts\terminal-proof.txt `
-            -OutputPath artifacts\terminal-proof.png
+            -InputPath artifacts\actual-run-terminal-proof.txt `
+            -OutputPath artifacts\actual-run-terminal-proof.png
 
       - uses: actions/upload-artifact@v4
         with:
-          name: hq-reflective-windows-proof
+          name: hq-reflective-windows-actual-run-proof
           path: |
             artifacts/hq-reflective-windows-amd64.exe
             artifacts/complete.json
             artifacts/context.json
             artifacts/draft.json
-            artifacts/terminal-proof.txt
-            artifacts/terminal-proof.png
+            artifacts/actual-run-terminal-proof.txt
+            artifacts/actual-run-terminal-proof.png
           if-no-files-found: error
