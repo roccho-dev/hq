@@ -13,7 +13,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: python3 -m unittest discover -s tests
       - run: mkdir -p artifacts
-      - run: PYTHONPATH=. python3 -m hq demo-autocomplete > artifacts/hq-terminal-autocomplete.txt
+      - run: PYTHONPATH=. python3 -m tools.hq_reference demo-autocomplete > artifacts/hq-terminal-autocomplete.txt
       - run: PYTHONPATH=. python3 tools/render_terminal_preview_png.py --input artifacts/hq-terminal-autocomplete.txt --out artifacts/hq-terminal-autocomplete-preview.png
       - uses: actions/upload-artifact@v4
         with:
