@@ -18,7 +18,6 @@ jobs:
           go-version: "1.23.x"
 
       - name: Build Linux proof binary
-        continue-on-error: true
         run: |
           mkdir -p artifacts
           go test ./... > artifacts/go-test-linux.txt 2>&1
