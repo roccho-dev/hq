@@ -123,15 +123,15 @@ fn arg_value(args: &[String], flag: &str) -> Option<String> {
 
 fn demo_autocomplete() -> String {
     let cases = [
-        ("key fuzzy: aid -> action_id-like key ranking", "{\"a", Some("ai")),
+        ("key fuzzy: ai -> assignee", "{\"a", Some("ai")),
         ("value fuzzy: d -> done/draft/deferred", "{\"status\": \"d", None),
-        ("action-like field: pri -> priority", "{\"status\": \"done\", \"pri", None),
+        ("field fuzzy: pri -> priority", "{\"status\": \"done\", \"pri", None),
         ("queue create: accept top suggestion", "{", None),
     ];
 
     let mut out = String::new();
     out.push_str("hq rust suggestion proof\n\n");
-    out.push_str("surface\n  cmp-like matcher suggestions\n\n");
+    out.push_str("surface\n  matcher-ranked cmp-like suggestions\n\n");
     out.push_str("boundary\n  JsonlWorld + CursorContext -> Suggestion[] with compileDraft -> queue.create JSONL\n\n");
 
     for (title, buffer, query) in cases {
