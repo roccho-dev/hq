@@ -1,4 +1,4 @@
-module hq-reflective-poc
+module hq
 
 go 1.23.0
 
