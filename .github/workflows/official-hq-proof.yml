@@ -2,9 +2,12 @@ name: Official hq proof
 
 on:
   pull_request:
+  push:
+    branches:
+      - main
 
 jobs:
-  test:
+  linux-official-hq-proof:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -12,3 +15,72 @@ jobs:
         with:
           go-version: "1.23.x"
       - run: bash scripts/check.sh
+      - name: Build official Linux hq binary
+        run: |
+          mkdir -p artifacts
+          go build -o artifacts/hq-linux-amd64 ./cmd/hq
+      - name: Prove official Linux Tab completion
+        run: |
+          python3 scripts/pty-tab-proof-v2.py \
+            ./artifacts/hq-linux-amd64 \
+            artifacts/official-hq-interactive-tab-proof-linux.txt
+      - name: Require official Linux proof markers
+        run: |
+          grep -F 'SENT_KEYS: {" + <TAB>' artifacts/official-hq-interactive-tab-proof-linux.txt
+          grep -F 'SENT_BYTES_HEX: 7b2209' artifacts/official-hq-interactive-tab-proof-linux.txt
+          grep -F '"tabProofA"' artifacts/official-hq-interactive-tab-proof-linux.txt
+          grep -F '"tabProofB"' artifacts/official-hq-interactive-tab-proof-linux.txt
+          grep -F '"tabProofC"' artifacts/official-hq-interactive-tab-proof-linux.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hq-official-proof-linux
+          path: |
+            artifacts/hq-linux-amd64
+            artifacts/official-hq-interactive-tab-proof-linux.txt
+          if-no-files-found: error
+
+  windows-official-hq-proof:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Install Windows terminal proof dependency
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check --quiet --upgrade pip
+          python -m pip install --disable-pip-version-check --quiet "setuptools==80.9.0" wexpect
+          python -c "import pkg_resources; import wexpect; print('windows terminal proof deps ok')"
+      - name: Build official Windows hq binary
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          go test ./...
+          go build -o artifacts/hq-windows-amd64.exe ./cmd/hq
+      - name: Prove official Windows Tab completion
+        shell: pwsh
+        run: |
+          python scripts/windows-tab-proof-v2.py `
+            .\artifacts\hq-windows-amd64.exe `
+            artifacts\official-hq-interactive-tab-proof-windows.txt
+      - name: Require official Windows proof markers
+        shell: pwsh
+        run: |
+          Select-String -Path artifacts\official-hq-interactive-tab-proof-windows.txt -SimpleMatch 'SENT_KEYS: {" + <TAB>'
+          Select-String -Path artifacts\official-hq-interactive-tab-proof-windows.txt -SimpleMatch 'SENT_BYTES_HEX: 7b2209'
+          Select-String -Path artifacts\official-hq-interactive-tab-proof-windows.txt -SimpleMatch 'WINDOWS_TERMINAL_SESSION: wexpect/winpty'
+          Select-String -Path artifacts\official-hq-interactive-tab-proof-windows.txt -SimpleMatch '"tabProofA"'
+          Select-String -Path artifacts\official-hq-interactive-tab-proof-windows.txt -SimpleMatch '"tabProofB"'
+          Select-String -Path artifacts\official-hq-interactive-tab-proof-windows.txt -SimpleMatch '"tabProofC"'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hq-official-proof-windows
+          path: |
+            artifacts/hq-windows-amd64.exe
+            artifacts/official-hq-interactive-tab-proof-windows.txt
+          if-no-files-found: error
