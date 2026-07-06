@@ -5,6 +5,11 @@ on:
   push:
     branches:
       - main
+      - proposals
+
+permissions:
+  contents: write
+  actions: read
 
 jobs:
   linux-official-hq-proof:
@@ -84,3 +89,40 @@ jobs:
             artifacts/hq-windows-amd64.exe
             artifacts/official-hq-interactive-tab-proof-windows.txt
           if-no-files-found: error
+
+  publish-proposals-release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/proposals'
+    runs-on: ubuntu-latest
+    needs:
+      - linux-official-hq-proof
+      - windows-official-hq-proof
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+      - name: Publish CI release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: hq-ci-${{ github.sha }}
+        run: |
+          set -euo pipefail
+          find release-assets -maxdepth 3 -type f -print
+          notes="CI-built hq binaries and terminal proof output for proposals commit ${GITHUB_SHA}."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" \
+              release-assets/hq-official-proof-linux/hq-linux-amd64 \
+              release-assets/hq-official-proof-linux/official-hq-interactive-tab-proof-linux.txt \
+              release-assets/hq-official-proof-windows/hq-windows-amd64.exe \
+              release-assets/hq-official-proof-windows/official-hq-interactive-tab-proof-windows.txt \
+              --clobber
+          else
+            gh release create "$TAG" \
+              --target "$GITHUB_SHA" \
+              --title "hq CI ${GITHUB_SHA::12}" \
+              --notes "$notes" \
+              --prerelease \
+              release-assets/hq-official-proof-linux/hq-linux-amd64 \
+              release-assets/hq-official-proof-linux/official-hq-interactive-tab-proof-linux.txt \
+              release-assets/hq-official-proof-windows/hq-windows-amd64.exe \
+              release-assets/hq-official-proof-windows/official-hq-interactive-tab-proof-windows.txt
+          fi
