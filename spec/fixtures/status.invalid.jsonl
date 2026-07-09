@@ -1,0 +1,5 @@
+{"case":"unknown-status","session":{"version":"session.v1","run_id":"run-invalid-status-001","instruction_id":"ins-invalid-status-001","target":"sh","status":"retrying","cwd":".","started_at":"2026-07-10T06:00:00Z","last_event_at":"2026-07-10T06:00:00Z"},"expected_code":"unknown_status"}
+{"case":"queued-to-completed","transition":{"from":"queued","to":"completed"},"expected_code":"invalid_transition"}
+{"case":"completed-to-running","transition":{"from":"completed","to":"running"},"expected_code":"terminal_reopen"}
+{"case":"timeout-to-queued","transition":{"from":"timeout","to":"queued"},"expected_code":"terminal_reopen"}
+{"case":"running-to-retrying","transition":{"from":"running","to":"retrying"},"expected_code":"unknown_status"}
