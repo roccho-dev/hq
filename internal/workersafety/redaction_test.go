@@ -2,33 +2,41 @@ package workersafety
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
+type redactionFixture struct {
+	Input          map[string]any `json:"input"`
+	MustNotContain []string       `json:"must_not_contain"`
+	MustContain    []string       `json:"must_contain"`
+}
+
 func TestRedactRecordMasksDurableLogSecretsAndPreservesStructure(t *testing.T) {
-	input := map[string]any{
-		"kind":              "worker.event.v1",
-		"run_id":            "run-001",
-		"status":            "completed",
-		"native_session_id": "session-001",
-		"env": map[string]any{
-			"API_TOKEN": "super-secret-token",
-			"MODE":      "test",
-		},
-		"payload": map[string]any{
-			"authorization": "Bearer abcdefghijklmnopqrstuvwxyz",
-			"prompt":        "use sk-abcdefghijklmnopqrstuvwxyz safely",
-		},
-		"stdout": "connected with ghp_abcdefghijklmnopqrstuvwxyz123456",
-		"stderr": "AWS_ACCESS_KEY_ID=AKIA1234567890ABCDEF",
-		"final": map[string]any{
-			"final_path":   ".hq/outputs/run-001/final.json",
-			"clientSecret": "do-not-store-this",
-		},
+	content, err := os.ReadFile(filepath.Join("..", "..", "spec", "fixtures", "worker-safety", "redaction.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokens := map[string]string{
+		"{{ENV_TOKEN}}":      strings.Repeat("env-secret-", 3),
+		"{{BEARER_TOKEN}}":   strings.Repeat("a", 26),
+		"{{OPENAI_TOKEN}}":   "sk-" + strings.Repeat("b", 24),
+		"{{GITHUB_TOKEN}}":   "ghp_" + strings.Repeat("c", 32),
+		"{{AWS_ACCESS_KEY}}": "AKIA" + strings.Repeat("D", 16),
+		"{{CLIENT_SECRET}}":  strings.Repeat("client-secret-", 2),
+	}
+	for marker, value := range tokens {
+		content = []byte(strings.ReplaceAll(string(content), marker, value))
 	}
 
-	redacted, changed := RedactRecord(input)
+	var fixture redactionFixture
+	if err := json.Unmarshal(content, &fixture); err != nil {
+		t.Fatal(err)
+	}
+
+	redacted, changed := RedactRecord(fixture.Input)
 	if !changed {
 		t.Fatal("expected redaction change")
 	}
@@ -37,26 +45,20 @@ func TestRedactRecordMasksDurableLogSecretsAndPreservesStructure(t *testing.T) {
 		t.Fatalf("redacted record must remain valid JSON: %v", err)
 	}
 	text := string(encoded)
-	for _, secret := range []string{
-		"super-secret-token",
-		"abcdefghijklmnopqrstuvwxyz",
-		"ghp_abcdefghijklmnopqrstuvwxyz123456",
-		"AKIA1234567890ABCDEF",
-		"do-not-store-this",
-	} {
+	for _, secret := range fixture.MustNotContain {
 		if strings.Contains(text, secret) {
 			t.Fatalf("secret %q leaked in %s", secret, text)
 		}
 	}
-	for _, required := range []string{"run-001", "completed", "session-001", ".hq/outputs/run-001/final.json"} {
+	for _, required := range fixture.MustContain {
 		if !strings.Contains(text, required) {
 			t.Fatalf("required debugging field %q was removed: %s", required, text)
 		}
 	}
-	if input["stdout"] == redacted["stdout"] {
+	if fixture.Input["stdout"] == redacted["stdout"] {
 		t.Fatal("stdout secret should be changed")
 	}
-	if input["run_id"] != redacted["run_id"] {
+	if fixture.Input["run_id"] != redacted["run_id"] {
 		t.Fatal("run_id must remain stable")
 	}
 }
