@@ -37,6 +37,13 @@
 
 Every path is below one project-local `.hq/` root. Run identifiers must be one path segment; traversal and alternate paths fail validation. This repository ignores its own root `.hq/` runtime data, while checked-in fixtures remain outside that directory.
 
+The shared queue path is used from both sides of the boundary:
+
+```text
+hq --accept <instruction-json> --queue .hq/queue/instructions.jsonl
+worker layout: NewLayout(projectRoot).InstructionQueue
+```
+
 ## Durable-data order
 
 ```text
@@ -93,7 +100,7 @@ A decision is emitted as `worker.policy.v1`, including instruction/run identity,
 
 ## Mechanical proof and breaking cases
 
-The package tests prove:
+The package tests load `spec/fixtures/worker-safety/redaction.json` and `policy.jsonl` as the executable contract and prove:
 
 - all queue/event/session/output/proof paths use one root and traversal fails;
 - env, payload, stdout, stderr, and final metadata examples do not retain known secrets;
