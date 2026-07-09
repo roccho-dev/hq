@@ -1,0 +1,8 @@
+{"from":"queued","to":"running"}
+{"from":"queued","to":"blocked"}
+{"from":"queued","to":"cancelled"}
+{"from":"running","to":"completed"}
+{"from":"running","to":"failed"}
+{"from":"running","to":"blocked"}
+{"from":"running","to":"timeout"}
+{"from":"running","to":"cancelled"}
