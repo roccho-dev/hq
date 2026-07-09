@@ -43,9 +43,10 @@ Every path is below one project-local `.hq/` root. Run identifiers must be one p
 instruction row
   -> contract validation          # worker issue #43
   -> workersafety.EvaluatePolicy
+  -> workersafety.RedactRecord(policy event)
   -> append worker.policy.v1
   -> dispatch only when may_dispatch=true
-  -> workersafety.RedactRecord
+  -> workersafety.RedactRecord(result event/final metadata)
   -> append event/final artifact  # worker issue #45
 ```
 
@@ -79,7 +80,7 @@ The zero-value policy denies dispatch.
 | any + `block` | any | `blocked` | false |
 | conflicting modes / unknown risk / invalid request | any | `blocked` | false |
 
-A decision is emitted as `worker.policy.v1`, including instruction/run identity, risk, status, reason, approval actor when present, and `may_dispatch`. It is evidence only. Approval is bound to the exact instruction digest so changing the request invalidates earlier consent.
+A decision is emitted as `worker.policy.v1`, including instruction/run identity, instruction digest, risk, status, reason, approval actor when present, and `may_dispatch`. It is evidence only. Approval is bound to the exact instruction digest so changing the request invalidates earlier consent.
 
 ## Ownership and non-scope
 
