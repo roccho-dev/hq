@@ -39,6 +39,19 @@ hq
 
 The cleanup path has established product identity, Go module/command ownership, Python tooling metadata, protocol fixture rows, generated-output boundary notes, and review/evidence notes.
 
+## Worker boundary contracts
+
+`hq` still stops at append-only instruction output. Worker execution uses versioned JSONL contracts:
+
+| Contract | Role |
+|---|---|
+| [`instruction.v1`](spec/instruction/v1.md) | Validated worker input; `hq` may append it but never executes it. |
+| [`result.v1`](spec/result/v1.md) | Append-only run events, output, final answer, and errors. |
+| [`session.v1`](spec/session/v1.md) | Rebuildable list/show projection, not a second authority. |
+| [status taxonomy v1](spec/status/v1.md) | Shared queued/running/terminal states and transitions. |
+
+Canonical, invalid, run, projection, and transition evidence lives under `spec/fixtures/` and is executed by `python3 -m unittest discover -s tests`.
+
 ## What hq must do
 
 | Behavior | Expected result |
