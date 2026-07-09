@@ -132,17 +132,22 @@ func TestPolicyDecisionIsJSONLReadyAndCarriesApprovalActor(t *testing.T) {
 	if roundTrip["kind"] != PolicyEventKind || roundTrip["status"] != string(PolicyAllowed) {
 		t.Fatalf("unexpected event: %s", encoded)
 	}
-	if roundTrip["approved_by"] != "owner" || roundTrip["may_dispatch"] != true {
+	if roundTrip["approved_by"] != "owner" || roundTrip["instruction_digest"] != request.InstructionDigest || roundTrip["may_dispatch"] != true {
 		t.Fatalf("approval evidence missing: %s", encoded)
 	}
 }
 
 func TestInvalidRequestCannotDispatch(t *testing.T) {
-	request := basePolicyRequest()
-	request.InstructionDigest = ""
-	request.Policy.AllowAuto = true
-	decision := EvaluatePolicy(request)
-	if decision.MayDispatch || decision.Status != PolicyBlocked || decision.Reason != "invalid_request" {
-		t.Fatalf("invalid request was not blocked: %#v", decision)
+	for _, mutate := range []func(*PolicyRequest){
+		func(request *PolicyRequest) { request.RunID = "" },
+		func(request *PolicyRequest) { request.InstructionDigest = "" },
+	} {
+		request := basePolicyRequest()
+		request.Policy.AllowAuto = true
+		mutate(&request)
+		decision := EvaluatePolicy(request)
+		if decision.MayDispatch || decision.Status != PolicyBlocked || decision.Reason != "invalid_request" {
+			t.Fatalf("invalid request was not blocked: %#v", decision)
+		}
 	}
 }
