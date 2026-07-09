@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-mkdir -p dist
+mkdir -p dist artifacts
 
 go test ./...
 go build -o dist/hq-linux-amd64 ./cmd/hq
@@ -13,9 +13,10 @@ GOOS=windows GOARCH=amd64 go build -o dist/hq-windows-amd64.exe ./cmd/hq
 
 ACCEPT_ARG='{"op":"queue.create","target":"ctx","payload":{"path":"demo.jsonl"}}'
 QUEUE=/tmp/hq-accept.queue.jsonl
-rm -f "$QUEUE" /tmp/hq-accept.json /tmp/hq-draft-noqueue.jsonl
+DRAFT_QUEUE=/tmp/hq-draft-noqueue.jsonl
+rm -f "$QUEUE" "$DRAFT_QUEUE" /tmp/hq-accept.json /tmp/hq-draft-noqueue.json
 ./dist/hq-linux-amd64 --accept "$ACCEPT_ARG" --queue "$QUEUE" >/tmp/hq-accept.json
-./dist/hq-linux-amd64 --draft "$ACCEPT_ARG" >/tmp/hq-draft-noqueue.json
+./dist/hq-linux-amd64 --draft "$ACCEPT_ARG" --queue "$DRAFT_QUEUE" >/tmp/hq-draft-noqueue.json
 
 python3 - <<'PY'
 import json
@@ -37,8 +38,12 @@ assert len(queue_rows) == 1, queue_rows
 queued = json.loads(queue_rows[0])
 assert queued == accept, (queued, accept)
 
-# A draft preview must not append anything unless --accept or interactive Enter is used.
+# A draft preview must not append even when a queue path is supplied.
 assert not Path('/tmp/hq-draft-noqueue.jsonl').exists()
 PY
+
+python3 scripts/vim-hq-contract-proof.py \
+  --binary ./dist/hq-linux-amd64 \
+  --artifact artifacts/vim-hq-contract-proof-linux.json
 
 printf 'ok\n'
