@@ -15,6 +15,7 @@ type policyFixture struct {
 		Status      PolicyStatus `json:"status"`
 		Reason      string       `json:"reason"`
 		MayDispatch bool         `json:"may_dispatch"`
+		Risk        Risk         `json:"risk,omitempty"`
 	} `json:"want"`
 }
 
@@ -48,6 +49,9 @@ func TestEvaluatePolicyFixtureMatrix(t *testing.T) {
 			decision := EvaluatePolicy(fixture.Request)
 			if decision.Status != fixture.Want.Status || decision.MayDispatch != fixture.Want.MayDispatch || decision.Reason != fixture.Want.Reason {
 				t.Fatalf("decision = %#v", decision)
+			}
+			if fixture.Want.Risk != "" && decision.Risk != fixture.Want.Risk {
+				t.Fatalf("effective risk = %q want %q", decision.Risk, fixture.Want.Risk)
 			}
 			if !decision.EvidenceOnly || decision.Kind != PolicyEventKind {
 				t.Fatalf("decision must be evidence-only JSONL event: %#v", decision)
