@@ -1,6 +1,9 @@
 package workersafety
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+)
 
 const PolicyEventKind = "worker.policy.v1"
 
@@ -88,6 +91,7 @@ func EvaluatePolicy(request PolicyRequest) PolicyDecision {
 		decision.Reason = "unknown_risk"
 		return decision
 	}
+	decision.Risk = effectiveRisk(request.Target, request.Operation, request.Risk)
 
 	modes := 0
 	if request.Policy.AllowAuto {
@@ -108,7 +112,7 @@ func EvaluatePolicy(request PolicyRequest) PolicyDecision {
 		return decision
 	}
 
-	if request.Risk == RiskDangerous && !request.Policy.RequireApproval {
+	if decision.Risk == RiskDangerous && !request.Policy.RequireApproval {
 		decision.Reason = "dangerous_requires_approval"
 		return decision
 	}
@@ -116,7 +120,7 @@ func EvaluatePolicy(request PolicyRequest) PolicyDecision {
 	if request.Policy.RequireApproval {
 		return evaluateApproval(request, decision)
 	}
-	if request.Policy.AllowAuto && request.Risk == RiskSafe {
+	if request.Policy.AllowAuto && decision.Risk == RiskSafe {
 		decision.Status = PolicyAllowed
 		decision.Reason = "safe_auto_allowed"
 		decision.MayDispatch = true
@@ -144,4 +148,43 @@ func evaluateApproval(request PolicyRequest, decision PolicyDecision) PolicyDeci
 	decision.MayDispatch = true
 	decision.ApprovedBy = approval.ApprovedBy
 	return decision
+}
+
+var safeOperationVerbs = map[string]struct{}{
+	"complete": {}, "draft": {}, "inspect": {}, "list": {}, "preview": {},
+	"query": {}, "read": {}, "show": {}, "status": {}, "tail": {}, "validate": {},
+}
+
+var dangerousTerms = map[string]struct{}{
+	"delete": {}, "destroy": {}, "drop": {}, "erase": {}, "force": {}, "kill": {},
+	"overwrite": {}, "prod": {}, "production": {}, "purge": {}, "remove": {}, "revoke": {},
+	"root": {}, "shutdown": {}, "system": {}, "truncate": {}, "wipe": {},
+}
+
+// effectiveRisk allows a caller to escalate risk but never to downgrade an
+// obviously destructive or unknown operation to safe. Unknown verbs are
+// dangerous by default; adding a new auto-safe verb therefore requires review.
+func effectiveRisk(target, operation string, claimed Risk) Risk {
+	if claimed == RiskDangerous {
+		return RiskDangerous
+	}
+	for _, token := range policyTokens(target + " " + operation) {
+		if _, dangerous := dangerousTerms[token]; dangerous {
+			return RiskDangerous
+		}
+	}
+	operationTokens := policyTokens(operation)
+	if len(operationTokens) == 0 {
+		return RiskDangerous
+	}
+	if _, safe := safeOperationVerbs[operationTokens[0]]; safe {
+		return RiskSafe
+	}
+	return RiskDangerous
+}
+
+func policyTokens(value string) []string {
+	return strings.FieldsFunc(strings.ToLower(value), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
 }
