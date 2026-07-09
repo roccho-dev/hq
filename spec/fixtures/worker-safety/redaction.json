@@ -1,0 +1,36 @@
+{
+  "input": {
+    "kind": "worker.event.v1",
+    "run_id": "run-001",
+    "status": "completed",
+    "native_session_id": "session-001",
+    "env": {
+      "API_TOKEN": "{{ENV_TOKEN}}",
+      "MODE": "test"
+    },
+    "payload": {
+      "authorization": "Bearer {{BEARER_TOKEN}}",
+      "prompt": "use {{OPENAI_TOKEN}} safely"
+    },
+    "stdout": "connected with {{GITHUB_TOKEN}}",
+    "stderr": "AWS_ACCESS_KEY_ID={{AWS_ACCESS_KEY}}",
+    "final": {
+      "final_path": ".hq/outputs/run-001/final.json",
+      "clientSecret": "{{CLIENT_SECRET}}"
+    }
+  },
+  "must_not_contain": [
+    "{{ENV_TOKEN}}",
+    "{{BEARER_TOKEN}}",
+    "{{OPENAI_TOKEN}}",
+    "{{GITHUB_TOKEN}}",
+    "{{AWS_ACCESS_KEY}}",
+    "{{CLIENT_SECRET}}"
+  ],
+  "must_contain": [
+    "run-001",
+    "completed",
+    "session-001",
+    ".hq/outputs/run-001/final.json"
+  ]
+}
