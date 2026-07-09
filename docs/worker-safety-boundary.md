@@ -74,13 +74,13 @@ This is a bounded safeguard, not full data-loss prevention or cryptographic secr
 
 ## Approval contract
 
-The zero-value policy denies dispatch.
+The zero-value policy denies dispatch. A row may request higher risk, but it cannot mark an unknown or obviously destructive operation safe. Only reviewed read-only operation verbs are eligible for `allow_auto`; unknown verbs default to dangerous.
 
 | Risk / policy | Approval | Status | `may_dispatch` |
 |---|---|---|---:|
 | safe + `allow_auto` | none | `allowed` | true |
 | safe + no mode | none | `blocked` | false |
-| dangerous + `allow_auto` | any | `blocked` | false |
+| dangerous, destructive, or unknown operation + `allow_auto` | any | `blocked` | false |
 | any + `require_approval` | missing | `approval_required` | false |
 | any + `require_approval` | stale digest | `blocked` | false |
 | any + `require_approval` | actor + exact instruction digest | `allowed` | true |
@@ -105,7 +105,7 @@ The package tests load `spec/fixtures/worker-safety/redaction.json` and `policy.
 - all queue/event/session/output/proof paths use one root and traversal fails;
 - env, payload, stdout, stderr, and final metadata examples do not retain known secrets;
 - valid JSON structure and debugging identity survive redaction;
-- dangerous auto-run, missing approval, stale approval, conflicting policy, unknown risk, and malformed requests all produce `may_dispatch=false`;
+- dangerous auto-run, false `risk:safe` labels, unknown operations, missing approval, stale approval, conflicting policy, unknown risk, and malformed requests all produce `may_dispatch=false`;
 - exact explicit approval is the only dangerous path that can dispatch.
 
 The design is intentionally one package rather than three feature packages: layout, redaction, and approval are independent functions but form one worker-side safety boundary. This minimizes repeated wiring while keeping each rule separately testable.
