@@ -1,9 +1,22 @@
 package workersafety
 
 import (
+	"bufio"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 )
+
+type policyFixture struct {
+	Name    string        `json:"name"`
+	Request PolicyRequest `json:"request"`
+	Want    struct {
+		Status      PolicyStatus `json:"status"`
+		Reason      string       `json:"reason"`
+		MayDispatch bool         `json:"may_dispatch"`
+	} `json:"want"`
+}
 
 func basePolicyRequest() PolicyRequest {
 	return PolicyRequest{
@@ -16,101 +29,36 @@ func basePolicyRequest() PolicyRequest {
 	}
 }
 
-func TestEvaluatePolicyFailClosedMatrix(t *testing.T) {
-	tests := []struct {
-		name     string
-		mutate   func(*PolicyRequest)
-		status   PolicyStatus
-		dispatch bool
-		reason   string
-	}{
-		{
-			name: "safe auto run",
-			mutate: func(request *PolicyRequest) {
-				request.Policy.AllowAuto = true
-			},
-			status: PolicyAllowed, dispatch: true, reason: "safe_auto_allowed",
-		},
-		{
-			name:   "safe default deny",
-			mutate: func(request *PolicyRequest) {},
-			status: PolicyBlocked, dispatch: false, reason: "default_deny",
-		},
-		{
-			name: "dangerous cannot auto run",
-			mutate: func(request *PolicyRequest) {
-				request.Risk = RiskDangerous
-				request.Operation = "delete.workspace"
-				request.Policy.AllowAuto = true
-			},
-			status: PolicyBlocked, dispatch: false, reason: "dangerous_requires_approval",
-		},
-		{
-			name: "dangerous waits for approval",
-			mutate: func(request *PolicyRequest) {
-				request.Risk = RiskDangerous
-				request.Operation = "delete.workspace"
-				request.Policy.RequireApproval = true
-			},
-			status: PolicyApprovalRequired, dispatch: false, reason: "approval_required",
-		},
-		{
-			name: "dangerous exact approval",
-			mutate: func(request *PolicyRequest) {
-				request.Risk = RiskDangerous
-				request.Operation = "delete.workspace"
-				request.Policy.RequireApproval = true
-				request.Approval = &Approval{Approved: true, ApprovedBy: "owner", InstructionDigest: request.InstructionDigest}
-			},
-			status: PolicyAllowed, dispatch: true, reason: "explicit_approval",
-		},
-		{
-			name: "stale approval blocked",
-			mutate: func(request *PolicyRequest) {
-				request.Risk = RiskDangerous
-				request.Operation = "delete.workspace"
-				request.Policy.RequireApproval = true
-				request.Approval = &Approval{Approved: true, ApprovedBy: "owner", InstructionDigest: "sha256:old"}
-			},
-			status: PolicyBlocked, dispatch: false, reason: "approval_digest_mismatch",
-		},
-		{
-			name: "policy conflict blocked",
-			mutate: func(request *PolicyRequest) {
-				request.Policy.AllowAuto = true
-				request.Policy.RequireApproval = true
-			},
-			status: PolicyBlocked, dispatch: false, reason: "policy_conflict",
-		},
-		{
-			name: "explicit block",
-			mutate: func(request *PolicyRequest) {
-				request.Policy.Block = true
-			},
-			status: PolicyBlocked, dispatch: false, reason: "policy_blocked",
-		},
-		{
-			name: "unknown risk blocked",
-			mutate: func(request *PolicyRequest) {
-				request.Risk = Risk("unknown")
-				request.Policy.AllowAuto = true
-			},
-			status: PolicyBlocked, dispatch: false, reason: "unknown_risk",
-		},
+func TestEvaluatePolicyFixtureMatrix(t *testing.T) {
+	file, err := os.Open(filepath.Join("..", "..", "spec", "fixtures", "worker-safety", "policy.jsonl"))
+	if err != nil {
+		t.Fatal(err)
 	}
+	defer file.Close()
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			request := basePolicyRequest()
-			test.mutate(&request)
-			decision := EvaluatePolicy(request)
-			if decision.Status != test.status || decision.MayDispatch != test.dispatch || decision.Reason != test.reason {
+	scanner := bufio.NewScanner(file)
+	count := 0
+	for scanner.Scan() {
+		count++
+		var fixture policyFixture
+		if err := json.Unmarshal(scanner.Bytes(), &fixture); err != nil {
+			t.Fatalf("fixture line %d: %v", count, err)
+		}
+		t.Run(fixture.Name, func(t *testing.T) {
+			decision := EvaluatePolicy(fixture.Request)
+			if decision.Status != fixture.Want.Status || decision.MayDispatch != fixture.Want.MayDispatch || decision.Reason != fixture.Want.Reason {
 				t.Fatalf("decision = %#v", decision)
 			}
 			if !decision.EvidenceOnly || decision.Kind != PolicyEventKind {
 				t.Fatalf("decision must be evidence-only JSONL event: %#v", decision)
 			}
 		})
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if count == 0 {
+		t.Fatal("policy fixture must contain cases")
 	}
 }
 
@@ -134,20 +82,5 @@ func TestPolicyDecisionIsJSONLReadyAndCarriesApprovalActor(t *testing.T) {
 	}
 	if roundTrip["approved_by"] != "owner" || roundTrip["instruction_digest"] != request.InstructionDigest || roundTrip["may_dispatch"] != true {
 		t.Fatalf("approval evidence missing: %s", encoded)
-	}
-}
-
-func TestInvalidRequestCannotDispatch(t *testing.T) {
-	for _, mutate := range []func(*PolicyRequest){
-		func(request *PolicyRequest) { request.RunID = "" },
-		func(request *PolicyRequest) { request.InstructionDigest = "" },
-	} {
-		request := basePolicyRequest()
-		request.Policy.AllowAuto = true
-		mutate(&request)
-		decision := EvaluatePolicy(request)
-		if decision.MayDispatch || decision.Status != PolicyBlocked || decision.Reason != "invalid_request" {
-			t.Fatalf("invalid request was not blocked: %#v", decision)
-		}
 	}
 }
