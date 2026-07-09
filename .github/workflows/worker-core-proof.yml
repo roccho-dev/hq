@@ -1,0 +1,63 @@
+name: Worker core proof
+
+on:
+  pull_request:
+  push:
+    branches:
+      - proposals
+      - main
+      - "proposal/**"
+
+jobs:
+  linux-worker-core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+      - name: Run worker core proof
+        run: bash scripts/check-worker.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hq-worker-core-linux-proof
+          path: artifacts/worker-core
+          if-no-files-found: error
+
+  windows-worker-core:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Test and build worker on Windows
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts\worker-core | Out-Null
+          go test ./internal/worker ./cmd/hq-worker
+          go vet ./internal/worker ./cmd/hq-worker
+          go build -o artifacts\worker-core\hq-worker-windows-amd64.exe ./cmd/hq-worker
+      - name: Prove Windows dry-run and fail-closed normal mode
+        shell: pwsh
+        run: |
+          $queue = "internal\worker\testdata\valid.jsonl"
+          $events = "artifacts\worker-core\events-windows.jsonl"
+          $plan = "artifacts\worker-core\plan-windows.jsonl"
+          $normal = "artifacts\worker-core\normal-windows.jsonl"
+          & .\artifacts\worker-core\hq-worker-windows-amd64.exe --input $queue --events $events --workspace . --dry-run | Set-Content -Encoding utf8 $plan
+          if (Test-Path $events) { throw "dry-run created an evidence file" }
+          & .\artifacts\worker-core\hq-worker-windows-amd64.exe --input $queue --events $events --workspace . | Set-Content -Encoding utf8 $normal
+          if ($LASTEXITCODE -ne 2) { throw "normal mode must fail closed with exit 2 before adapters exist" }
+          python -c "import json,pathlib; p=pathlib.Path(r'$plan'); rows=[json.loads(x) for x in p.read_text(encoding='utf-8-sig').splitlines() if x]; assert len(rows)==4 and all(x['decision']=='accepted' for x in rows)"
+          python -c "import json,pathlib; p=pathlib.Path(r'$events'); rows=[json.loads(x) for x in p.read_text(encoding='utf-8-sig').splitlines() if x]; assert len(rows)==12 and sum(x.get('kind')=='blocked' for x in rows)==4"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hq-worker-core-windows-proof
+          path: artifacts/worker-core
+          if-no-files-found: error
