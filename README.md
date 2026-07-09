@@ -46,6 +46,7 @@ The cleanup path has established product identity, Go module/command ownership, 
 | Contract | Role |
 |---|---|
 | [`instruction.v1`](spec/instruction/v1.md) | Validated worker input; `hq` may append it but never executes it. |
+| [`validation.v1`](spec/validation/v1.md) | Append-only rejection evidence for input that cannot become a valid instruction. |
 | [`result.v1`](spec/result/v1.md) | Append-only run events, output, final answer, and errors. |
 | [`session.v1`](spec/session/v1.md) | Rebuildable list/show projection, not a second authority. |
 | [status taxonomy v1](spec/status/v1.md) | Shared queued/running/terminal states and transitions. |
