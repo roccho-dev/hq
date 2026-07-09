@@ -4,6 +4,7 @@ set -euo pipefail
 mkdir -p dist artifacts
 
 go test ./...
+python3 -m unittest discover -s tests -p 'test_protocol_contract.py'
 go build -o dist/hq-linux-amd64 ./cmd/hq
 GOOS=windows GOARCH=amd64 go build -o dist/hq-windows-amd64.exe ./cmd/hq
 
