@@ -51,6 +51,12 @@ The cleanup path has established product identity, Go module/command ownership, 
 | Schema changes | Suggestions change without hardcoding business keys in product code |
 | Linux/Windows terminal checks run | Literal Tab operation remains guarded by CI evidence |
 
+## Vim boundary
+
+Vim is a thin client of the public `cmd/hq` contract. It may pass buffer/cursor/schema input, show completion or draft output, and explicitly accept one candidate to one queue path. Completion and draft are read-only; accept without `--queue` is also non-durable; accept with `--queue` appends exactly one row. Vim and `hq` do not start workers or target adapters.
+
+See `docs/vim-to-hq-contract.md` and `spec/fixtures/vim-hq.contract.jsonl`. The same contract proof runs against the official Linux and Windows binaries.
+
 ## Runtime and evidence status
 
 The official Go command path is `cmd/hq`, and the module name is `hq`.
