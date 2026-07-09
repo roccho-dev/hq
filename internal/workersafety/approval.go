@@ -48,32 +48,34 @@ type PolicyRequest struct {
 // PolicyDecision is an evidence-only JSONL-ready event. Adapter dispatch is
 // permitted only when MayDispatch is true.
 type PolicyDecision struct {
-	Kind          string       `json:"kind"`
-	InstructionID string       `json:"instruction_id"`
-	RunID         string       `json:"run_id"`
-	Target        string       `json:"target"`
-	Operation     string       `json:"operation"`
-	Risk          Risk         `json:"risk"`
-	Status        PolicyStatus `json:"status"`
-	Reason        string       `json:"reason"`
-	MayDispatch   bool         `json:"may_dispatch"`
-	ApprovedBy    string       `json:"approved_by,omitempty"`
-	EvidenceOnly  bool         `json:"evidence_only"`
+	Kind              string       `json:"kind"`
+	InstructionID     string       `json:"instruction_id"`
+	InstructionDigest string       `json:"instruction_digest"`
+	RunID             string       `json:"run_id"`
+	Target            string       `json:"target"`
+	Operation         string       `json:"operation"`
+	Risk              Risk         `json:"risk"`
+	Status            PolicyStatus `json:"status"`
+	Reason            string       `json:"reason"`
+	MayDispatch       bool         `json:"may_dispatch"`
+	ApprovedBy        string       `json:"approved_by,omitempty"`
+	EvidenceOnly      bool         `json:"evidence_only"`
 }
 
 // EvaluatePolicy is fail-closed and performs no adapter or filesystem effect.
 func EvaluatePolicy(request PolicyRequest) PolicyDecision {
 	decision := PolicyDecision{
-		Kind:          PolicyEventKind,
-		InstructionID: request.InstructionID,
-		RunID:         request.RunID,
-		Target:        request.Target,
-		Operation:     request.Operation,
-		Risk:          request.Risk,
-		Status:        PolicyBlocked,
-		Reason:        "default_deny",
-		MayDispatch:   false,
-		EvidenceOnly:  true,
+		Kind:              PolicyEventKind,
+		InstructionID:     request.InstructionID,
+		InstructionDigest: request.InstructionDigest,
+		RunID:             request.RunID,
+		Target:            request.Target,
+		Operation:         request.Operation,
+		Risk:              request.Risk,
+		Status:            PolicyBlocked,
+		Reason:            "default_deny",
+		MayDispatch:       false,
+		EvidenceOnly:      true,
 	}
 
 	if strings.TrimSpace(request.InstructionID) == "" || strings.TrimSpace(request.RunID) == "" ||
