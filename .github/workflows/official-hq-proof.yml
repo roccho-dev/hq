@@ -37,6 +37,7 @@ jobs:
           path: |
             artifacts/hq-linux-amd64
             artifacts/official-hq-interactive-tab-proof-linux.txt
+            artifacts/vim-hq-contract-proof-linux.json
           if-no-files-found: error
 
   windows-official-hq-proof:
@@ -61,13 +62,19 @@ jobs:
           New-Item -ItemType Directory -Force artifacts | Out-Null
           go test ./...
           go build -o artifacts/hq-windows-amd64.exe ./cmd/hq
+      - name: Prove Vim-to-hq contract on Windows
+        shell: pwsh
+        run: |
+          python scripts/vim-hq-contract-proof.py `
+            --binary artifacts\hq-windows-amd64.exe `
+            --artifact artifacts\vim-hq-contract-proof-windows.json
       - name: Prove official Windows Tab completion
         shell: pwsh
         run: |
           python scripts/windows-tab-proof-v2.py `
             .\artifacts\hq-windows-amd64.exe `
             artifacts\official-hq-interactive-tab-proof-windows.txt
-      - name: Require official Windows proof markers
+      - name: Require Windows literal Tab proof markers
         shell: pwsh
         run: |
           Select-String -Path artifacts\official-hq-interactive-tab-proof-windows.txt -SimpleMatch 'SENT_KEYS: {" + <TAB>'
@@ -83,4 +90,5 @@ jobs:
           path: |
             artifacts/hq-windows-amd64.exe
             artifacts/official-hq-interactive-tab-proof-windows.txt
+            artifacts/vim-hq-contract-proof-windows.json
           if-no-files-found: error
