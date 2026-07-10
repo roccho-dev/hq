@@ -11,12 +11,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: python3 -m unittest discover -s tests
       - run: mkdir -p artifacts
+      - name: Run contract tests
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 -m unittest discover -s tests 2>&1 | tee artifacts/unittest.log
       - run: PYTHONPATH=. python3 -m hq demo-autocomplete > artifacts/hq-terminal-autocomplete.txt
       - run: PYTHONPATH=. python3 tools/render_terminal_preview_png.py --input artifacts/hq-terminal-autocomplete.txt --out artifacts/hq-terminal-autocomplete-preview.png
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: hq-terminal-autocomplete-preview
-          path: artifacts/hq-terminal-autocomplete-preview.png
-          if-no-files-found: error
+          name: hq-ci-evidence
+          path: |
+            artifacts/unittest.log
+            artifacts/hq-terminal-autocomplete.txt
+            artifacts/hq-terminal-autocomplete-preview.png
+          if-no-files-found: warn
