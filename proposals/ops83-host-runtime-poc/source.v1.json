@@ -1,0 +1,13 @@
+{
+  "kind": "hq.proposalSource.v1",
+  "authority": false,
+  "sourceRepository": "roccho-dev/ops",
+  "sourcePullRequest": 83,
+  "sourceBranch": "proposal/hq-lsp-jsonl-host-open-260710",
+  "sourceCommit": "cfeec23d21633d3c78a4bee4427841b80d93fbef",
+  "sourcePath": "packages/hq",
+  "snapshotMode": "tracked-files-only",
+  "excluded": [
+    "packages/hq/.tmp/**"
+  ]
+}

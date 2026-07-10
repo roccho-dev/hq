@@ -1,0 +1,1 @@
+{"kind":"hq.commandSpec.v1","id":"host.open","label":"explorer.open","detail":"Queue a host path for the Windows Explorer adapter","insertText":"{\"kind\":\"hq.hostOpenRequest.v1\",\"path\":\"C:\\\\path\\\\to\\\\open\"}","bufferKind":"hq.hostOpenRequest.v1"}
