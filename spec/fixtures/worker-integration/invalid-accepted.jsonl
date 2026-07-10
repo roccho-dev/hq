@@ -1,0 +1,3 @@
+{"case":"wrong-kind","row":{"kind":"draft.instruction","queue":"instruction.jsonl","instruction":{}}}
+{"case":"wrong-queue","row":{"kind":"accepted.instruction","queue":"other.jsonl","instruction":{}}}
+{"case":"missing-inner","row":{"kind":"accepted.instruction","queue":"instruction.jsonl"}}

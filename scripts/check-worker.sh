@@ -3,9 +3,9 @@ set -euo pipefail
 
 mkdir -p artifacts/worker-core
 
-go test ./internal/worker ./cmd/hq-worker 2>&1 | tee artifacts/worker-core/go-test.log
-go test -race ./internal/worker 2>&1 | tee artifacts/worker-core/go-race.log
-go vet ./internal/worker ./cmd/hq-worker 2>&1 | tee artifacts/worker-core/go-vet.log
+go test ./internal/worker ./internal/workeraccept ./internal/workerclaim ./cmd/hq-worker 2>&1 | tee artifacts/worker-core/go-test.log
+go test -race ./internal/worker ./internal/workeraccept ./internal/workerclaim 2>&1 | tee artifacts/worker-core/go-race.log
+go vet ./internal/worker ./internal/workeraccept ./internal/workerclaim ./cmd/hq-worker 2>&1 | tee artifacts/worker-core/go-vet.log
 go build -o artifacts/worker-core/hq-worker-linux-amd64 ./cmd/hq-worker
 GOOS=windows GOARCH=amd64 go build -o artifacts/worker-core/hq-worker-windows-amd64.exe ./cmd/hq-worker
 
@@ -36,6 +36,8 @@ normal_rc=$?
 set -e
 test "$normal_rc" -eq 2
 
+test ! -e .hq/worker/claim.json
+
 set +e
 ./artifacts/worker-core/hq-worker-linux-amd64 \
   --input "$QUEUE" \
@@ -44,6 +46,8 @@ set +e
 duplicate_rc=$?
 set -e
 test "$duplicate_rc" -eq 2
+
+test ! -e .hq/worker/claim.json
 
 ./artifacts/worker-core/hq-worker-linux-amd64 list \
   --input "$QUEUE" \
@@ -81,22 +85,27 @@ assert len(plans) == 4, plans
 assert {row["target"] for row in plans} == {"sh", "herdr", "codex", "claude"}, plans
 assert all(row["version"] == "worker.plan.v1" for row in plans), plans
 assert all(row["decision"] == "accepted" and row["policy"]["allowed"] for row in plans), plans
+assert all(row["instruction_digest"].startswith("sha256:") and len(row["instruction_digest"]) == 71 for row in plans), plans
 
 normal = [json.loads(line) for line in (root / "normal.jsonl").read_text().splitlines() if line]
-assert len(normal) == 8, normal
-assert sum(row["version"] == "result.v1" and row["kind"] == "accepted" for row in normal) == 4, normal
-blocked = [row for row in normal if row["version"] == "result.v1" and row["kind"] == "blocked"]
+assert len(normal) == 12, normal
+policies = [row for row in normal if row.get("kind") == "worker.policy.v1"]
+assert len(policies) == 4, policies
+assert all(row["status"] == "approval_required" and row["may_dispatch"] is False for row in policies), policies
+assert sum(row.get("version") == "result.v1" and row.get("kind") == "accepted" for row in normal) == 4, normal
+blocked = [row for row in normal if row.get("version") == "result.v1" and row.get("kind") == "blocked"]
 assert len(blocked) == 4, blocked
-assert all(row["error"]["code"] == "adapter_unavailable" for row in blocked), blocked
+assert all(row["error"]["code"] == "approval_required" for row in blocked), blocked
 
 duplicates = [json.loads(line) for line in (root / "duplicate.jsonl").read_text().splitlines() if line]
 assert len(duplicates) == 4, duplicates
 assert all(row["version"] == "validation.v1" and row["status"] == "blocked" and row["error"]["code"] == "duplicate_id" for row in duplicates), duplicates
 
 evidence = [json.loads(line) for line in (root / "events.jsonl").read_text().splitlines() if line]
-assert len(evidence) == 12, evidence
-assert len({row.get("event_id") for row in evidence if row["version"] == "result.v1"}) == 8
-assert sum(row["version"] == "validation.v1" for row in evidence) == 4
+assert len(evidence) == 16, evidence
+assert sum(row.get("kind") == "worker.policy.v1" for row in evidence) == 4
+assert len({row.get("event_id") for row in evidence if row.get("version") == "result.v1"}) == 8
+assert sum(row.get("version") == "validation.v1" for row in evidence) == 4
 
 ledger = [json.loads(line) for line in (root / "ledger.jsonl").read_text().splitlines() if line]
 assert len(ledger) == 4, ledger
@@ -114,7 +123,7 @@ show = json.loads((root / "show.json").read_text())
 assert show["version"] == "worker.run-detail.v1", show
 assert show["run"]["run_id"] == ledger[0]["run_id"], show
 assert show["run"]["status"] == "blocked", show
-assert show["run"]["error"]["code"] == "adapter_unavailable", show
+assert show["run"]["error"]["code"] == "approval_required", show
 assert "error" not in show, show
 assert len(show["events"]) == 2, show
 

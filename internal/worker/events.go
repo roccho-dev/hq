@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"hq/internal/workersafety"
 )
 
 type EventLog struct {
@@ -17,21 +19,23 @@ type EventLog struct {
 
 func NewEventLog(path string) *EventLog { return &EventLog{path: path} }
 
+// Append is a final defensive redaction boundary. Runner already supplies a
+// redacted row, but direct callers cannot bypass durable secret masking.
 func (l *EventLog) Append(entry LogEntry) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	redacted, err := RedactLogEntry(entry)
+	if err != nil {
+		return err
+	}
 	var value any
 	switch {
-	case entry.Validation != nil && entry.Result == nil:
-		if err := entry.Validation.Validate(); err != nil {
-			return err
-		}
-		value = entry.Validation
-	case entry.Result != nil && entry.Validation == nil:
-		if err := entry.Result.Validate(); err != nil {
-			return err
-		}
-		value = entry.Result
+	case redacted.Validation != nil:
+		value = redacted.Validation
+	case redacted.Result != nil:
+		value = redacted.Result
+	case redacted.Policy != nil:
+		value = redacted.Policy
 	default:
 		return fmt.Errorf("log entry must contain exactly one row")
 	}
@@ -71,12 +75,13 @@ func LoadEventLog(r io.Reader) (LogData, error) {
 		}
 		var header struct {
 			Version string `json:"version"`
+			Kind    string `json:"kind"`
 		}
 		if err := json.Unmarshal(s.Bytes(), &header); err != nil {
 			return LogData{}, fmt.Errorf("event line %d: %w", line, err)
 		}
-		switch header.Version {
-		case ValidationVersionV1:
+		switch {
+		case header.Version == ValidationVersionV1:
 			var row ValidationRow
 			if err := decodeStrict(s.Bytes(), &row); err != nil {
 				return LogData{}, fmt.Errorf("validation line %d: %w", line, err)
@@ -85,7 +90,7 @@ func LoadEventLog(r io.Reader) (LogData, error) {
 				return LogData{}, fmt.Errorf("validation line %d: %w", line, err)
 			}
 			data.Validations = append(data.Validations, row)
-		case ResultVersionV1:
+		case header.Version == ResultVersionV1:
 			var row ResultRow
 			if err := decodeStrict(s.Bytes(), &row); err != nil {
 				return LogData{}, fmt.Errorf("result line %d: %w", line, err)
@@ -98,8 +103,17 @@ func LoadEventLog(r io.Reader) (LogData, error) {
 			}
 			seenEventIDs[row.EventID] = struct{}{}
 			data.Results = append(data.Results, row)
+		case header.Kind == workersafety.PolicyEventKind:
+			var row workersafety.PolicyDecision
+			if err := decodeStrict(s.Bytes(), &row); err != nil {
+				return LogData{}, fmt.Errorf("policy line %d: %w", line, err)
+			}
+			if err := validatePolicyDecision(row); err != nil {
+				return LogData{}, fmt.Errorf("policy line %d: %w", line, err)
+			}
+			data.Policies = append(data.Policies, row)
 		default:
-			return LogData{}, fmt.Errorf("event line %d: unsupported version %q", line, header.Version)
+			return LogData{}, fmt.Errorf("event line %d: unsupported version %q and kind %q", line, header.Version, header.Kind)
 		}
 	}
 	if err := s.Err(); err != nil {
