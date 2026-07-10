@@ -39,8 +39,8 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force artifacts\worker-core | Out-Null
-          go test ./internal/worker ./cmd/hq-worker
-          go vet ./internal/worker ./cmd/hq-worker
+          go test ./internal/worker ./internal/workeraccept ./internal/workerclaim ./cmd/hq-worker
+          go vet ./internal/worker ./internal/workeraccept ./internal/workerclaim ./cmd/hq-worker
           go build -o artifacts\worker-core\hq-worker-windows-amd64.exe ./cmd/hq-worker
       - name: Prove Windows processing and observation
         shell: pwsh
@@ -57,7 +57,8 @@ jobs:
           if (Test-Path $events) { throw "dry-run created an evidence file" }
 
           & .\artifacts\worker-core\hq-worker-windows-amd64.exe --input $queue --events $events --workspace . | Set-Content -Encoding utf8 $normal
-          if ($LASTEXITCODE -ne 2) { throw "normal mode must fail closed with exit 2 before adapters exist" }
+          if ($LASTEXITCODE -ne 2) { throw "normal mode must fail closed with exit 2 without approval" }
+          if (Test-Path .hq\worker\claim.json) { throw "normal shutdown left a worker claim" }
 
           & .\artifacts\worker-core\hq-worker-windows-amd64.exe list --input $queue --events $events --json | Set-Content -Encoding utf8 $ledger
           if ($LASTEXITCODE -ne 0) { throw "worker list failed" }
@@ -69,10 +70,10 @@ jobs:
           & .\artifacts\worker-core\hq-worker-windows-amd64.exe tail --events $events --run $runId --follow=false --json | Set-Content -Encoding utf8 $tail
           if ($LASTEXITCODE -ne 0) { throw "worker tail failed" }
 
-          python -c "import json,pathlib; p=pathlib.Path(r'$plan'); rows=[json.loads(x) for x in p.read_text(encoding='utf-8-sig').splitlines() if x]; assert len(rows)==4 and all(x['decision']=='accepted' for x in rows)"
-          python -c "import json,pathlib; p=pathlib.Path(r'$events'); rows=[json.loads(x) for x in p.read_text(encoding='utf-8-sig').splitlines() if x]; assert len(rows)==8 and sum(x.get('kind')=='blocked' for x in rows)==4"
+          python -c "import json,pathlib; p=pathlib.Path(r'$plan'); rows=[json.loads(x) for x in p.read_text(encoding='utf-8-sig').splitlines() if x]; assert len(rows)==4 and all(x['decision']=='accepted' and x['instruction_digest'].startswith('sha256:') for x in rows)"
+          python -c "import json,pathlib; p=pathlib.Path(r'$events'); rows=[json.loads(x) for x in p.read_text(encoding='utf-8-sig').splitlines() if x]; assert len(rows)==12 and sum(x.get('kind')=='worker.policy.v1' for x in rows)==4 and sum(x.get('kind')=='blocked' for x in rows)==4 and all(x['error']['code']=='approval_required' for x in rows if x.get('kind')=='blocked')"
           python -c "import json,pathlib; rows=[json.loads(x) for x in pathlib.Path(r'$ledger').read_text(encoding='utf-8-sig').splitlines() if x]; assert len(rows)==4 and {x['target'] for x in rows}=={'sh','herdr','codex','claude'} and all(x['version']=='worker.ledger.v1' and x['status']=='blocked' for x in rows) and len({x['summary'] for x in rows})==4"
-          python -c "import json,pathlib; row=json.loads(pathlib.Path(r'$show').read_text(encoding='utf-8-sig')); assert row['version']=='worker.run-detail.v1' and row['run']['run_id']==r'$runId' and row['run']['error']['code']=='adapter_unavailable' and 'error' not in row"
+          python -c "import json,pathlib; row=json.loads(pathlib.Path(r'$show').read_text(encoding='utf-8-sig')); assert row['version']=='worker.run-detail.v1' and row['run']['run_id']==r'$runId' and row['run']['error']['code']=='approval_required' and 'error' not in row"
           python -c "import json,pathlib; rows=[json.loads(x) for x in pathlib.Path(r'$tail').read_text(encoding='utf-8-sig').splitlines() if x]; assert [x['kind'] for x in rows]==['accepted','blocked'] and rows[-1]['run_id']==r'$runId'"
       - uses: actions/upload-artifact@v4
         if: always()
