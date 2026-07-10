@@ -18,11 +18,15 @@ jobs:
           go-version: "1.23.x"
       - name: Run worker core proof
         run: bash scripts/check-worker.sh
+      - name: Prove actual hq accepted output reaches worker
+        run: bash scripts/check-worker-integration.sh
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: hq-worker-core-linux-proof
-          path: artifacts/worker-core
+          path: |
+            artifacts/worker-core
+            artifacts/worker-integration
           if-no-files-found: error
 
   windows-worker-core:
@@ -41,6 +45,7 @@ jobs:
           New-Item -ItemType Directory -Force artifacts\worker-core | Out-Null
           go test ./internal/worker ./internal/workeraccept ./internal/workerclaim ./cmd/hq-worker
           go vet ./internal/worker ./internal/workeraccept ./internal/workerclaim ./cmd/hq-worker
+          go build -o artifacts\worker-core\hq-windows-amd64.exe ./cmd/hq
           go build -o artifacts\worker-core\hq-worker-windows-amd64.exe ./cmd/hq-worker
       - name: Prove Windows processing and observation
         shell: pwsh
@@ -75,6 +80,37 @@ jobs:
           python -c "import json,pathlib; rows=[json.loads(x) for x in pathlib.Path(r'$ledger').read_text(encoding='utf-8-sig').splitlines() if x]; assert len(rows)==4 and {x['target'] for x in rows}=={'sh','herdr','codex','claude'} and all(x['version']=='worker.ledger.v1' and x['status']=='blocked' for x in rows) and len({x['summary'] for x in rows})==4"
           python -c "import json,pathlib; row=json.loads(pathlib.Path(r'$show').read_text(encoding='utf-8-sig')); assert row['version']=='worker.run-detail.v1' and row['run']['run_id']==r'$runId' and row['run']['error']['code']=='approval_required' and 'error' not in row"
           python -c "import json,pathlib; rows=[json.loads(x) for x in pathlib.Path(r'$tail').read_text(encoding='utf-8-sig').splitlines() if x]; assert [x['kind'] for x in rows]==['accepted','blocked'] and rows[-1]['run_id']==r'$runId'"
+      - name: Prove actual Windows hq accepted output reaches worker
+        shell: pwsh
+        run: |
+          $project = "artifacts\worker-core\actual-project"
+          $accepted = "artifacts\worker-core\actual-accepted.jsonl"
+          $acceptedOutput = "artifacts\worker-core\actual-accepted.json"
+          $events = "artifacts\worker-core\actual-events.jsonl"
+          $plan = "artifacts\worker-core\actual-plan.jsonl"
+          $normal = "artifacts\worker-core\actual-normal.jsonl"
+          $ledger = "artifacts\worker-core\actual-ledger.jsonl"
+          New-Item -ItemType Directory -Force $project | Out-Null
+          $instruction = '{"id":"ins-actual-windows-001","version":"instruction.v1","op":"run","target":"sh","payload":{"argv":["printf","actual-windows"],"cwd":"."},"created_at":"2026-07-10T06:31:00Z","reason":"actual Windows hq bridge proof"}'
+
+          & .\artifacts\worker-core\hq-windows-amd64.exe --accept $instruction --queue $accepted | Set-Content -Encoding utf8 $acceptedOutput
+          if ($LASTEXITCODE -ne 0) { throw "actual hq acceptance failed" }
+
+          & .\artifacts\worker-core\hq-worker-windows-amd64.exe --input $accepted --input-format accepted.instruction --events $events --workspace $project --dry-run | Set-Content -Encoding utf8 $plan
+          if ($LASTEXITCODE -ne 0) { throw "accepted input dry-run failed" }
+          if (Test-Path $events) { throw "accepted dry-run created events" }
+
+          & .\artifacts\worker-core\hq-worker-windows-amd64.exe --input $accepted --input-format accepted.instruction --events $events --workspace $project | Set-Content -Encoding utf8 $normal
+          if ($LASTEXITCODE -ne 2) { throw "accepted input must wait for approval" }
+          if (Test-Path "$project\.hq\worker\claim.json") { throw "actual path left a worker claim" }
+
+          & .\artifacts\worker-core\hq-worker-windows-amd64.exe list --input $accepted --input-format accepted.instruction --events $events --json | Set-Content -Encoding utf8 $ledger
+          if ($LASTEXITCODE -ne 0) { throw "accepted input list failed" }
+
+          python -c "import json,pathlib; returned=json.loads(pathlib.Path(r'$acceptedOutput').read_text(encoding='utf-8-sig')); rows=[json.loads(x) for x in pathlib.Path(r'$accepted').read_text(encoding='utf-8').splitlines() if x]; original=json.loads(r'''$instruction'''); assert len(rows)==1 and rows[0]==returned and returned['kind']=='accepted.instruction' and returned['instruction']==original"
+          python -c "import json,pathlib; rows=[json.loads(x) for x in pathlib.Path(r'$plan').read_text(encoding='utf-8-sig').splitlines() if x]; assert len(rows)==1 and rows[0]['instruction_id']=='ins-actual-windows-001' and rows[0]['instruction_digest'].startswith('sha256:')"
+          python -c "import json,pathlib; rows=[json.loads(x) for x in pathlib.Path(r'$normal').read_text(encoding='utf-8-sig').splitlines() if x]; assert [x.get('kind') for x in rows]==['worker.policy.v1','accepted','blocked'] and rows[-1]['error']['code']=='approval_required'"
+          python -c "import json,pathlib; rows=[json.loads(x) for x in pathlib.Path(r'$ledger').read_text(encoding='utf-8-sig').splitlines() if x]; assert len(rows)==1 and rows[0]['instruction_id']=='ins-actual-windows-001' and rows[0]['status']=='blocked'"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
