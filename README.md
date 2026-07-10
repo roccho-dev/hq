@@ -1,97 +1,104 @@
 # hq
 
-`hq` is a JSONL-aware autocomplete compiler.
+`hq` is a meaning-free JSONL autocomplete compiler and human-acceptance surface.
 
-It reads a JSONL world and the user's current cursor context, returns compile-ready suggestions, accepts one human-selected suggestion, and writes the accepted instruction as append-only JSONL.
+It reads an adapter-provided JSONL world plus the user's cursor context, returns compile-ready suggestions, accepts one human-selected draft, and may append that accepted instruction as one JSONL row. It does not execute the instruction.
+
+> `hq is meaning-free; JSONL carries meaning; a downstream worker executes.`
 
 ```text
 JsonlWorld + CursorContext
   -> Suggestion[] with compileDraft
-  -> Acceptance
-  -> Instruction JSONL row
+  -> explicit human Acceptance
+  -> accepted.instruction compiler envelope
+  -> downstream validation / instruction.v1
+  -> worker outside hq
 ```
 
 ## Product identity
 
 | Area | Role |
 |---|---|
-| Product | `hq`, a terminal runtime for JSONL-aware autocomplete compilation |
+| Product | `hq`, a terminal compiler and acceptance surface for JSONL instructions |
 | Protocol | JSONL world, cursor context, suggestion, compileDraft, acceptance, instruction |
+| Meaning owner | Adapter-provided JSONL schema and data |
+| Execution owner | A downstream worker and its target adapters, outside `hq` |
 | Correctness authority | `spec/fixtures/` contract rows and CI checks |
-| Official runtime direction | Go terminal runtime |
+| Official runtime | Go command at `cmd/hq` |
 | Python | Tooling only: preview rendering, fixture checks, migration helpers, reference checks |
-| Evidence | CI status, workflow artifacts, `docs/evidence/`, `docs/review.md`, and `PROOF.md` pointer note |
-| Generated outputs | Review evidence only, not source authority |
+| Evidence | CI status, workflow artifacts, `docs/evidence/`, and `docs/review.md` |
+| Generated outputs | Review evidence only, not source or execution authority |
 
-The repository should read as a product with evidence, not as a pile of POCs.
+The repository should read as a small product with enforceable boundaries, not as a process runner or a collection of target-specific integrations.
 
-## Completed #13 cleanup path
+## Allowed and forbidden responsibilities
 
-Issue #13 normalizes this repo into:
+| `hq` may | `hq` must not |
+|---|---|
+| Analyze buffer and cursor context | Launch shell, Herdr, Codex, Claude, PTY, or another process |
+| Rank context-valid suggestions | Dispatch to named execution adapters |
+| Build and display `compileDraft` | Decide execution policy, approval, retry, or cancellation |
+| Accept one human-selected draft | Own run/session registries or target logs |
+| Append exactly one accepted row when `--queue` is explicitly supplied | Treat preview, completion, or draft generation as acceptance |
 
-```text
-hq
-  protocol-first
-  Go runtime
-  Python tooling
-  Linux/Windows terminal checks
-```
-
-The cleanup path has established product identity, Go module/command ownership, Python tooling metadata, protocol fixture rows, generated-output boundary notes, and review/evidence notes.
+Detailed ownership and proof are in [`docs/boundary.md`](docs/boundary.md) and [`docs/architecture/core-port-adapter-boundary.md`](docs/architecture/core-port-adapter-boundary.md).
 
 ## Worker boundary contracts
 
-`hq` still stops at append-only instruction output. Worker execution uses versioned JSONL contracts:
+`hq` stops at compiler acceptance and explicit append. Worker processing uses versioned JSONL contracts downstream:
 
 | Contract | Role |
 |---|---|
-| [`instruction.v1`](spec/instruction/v1.md) | Validated worker input; `hq` may append it but never executes it. |
+| `accepted.instruction` | Current compiler acceptance envelope emitted by `cmd/hq`; queue intent only, never execution authority. |
+| [`instruction.v1`](spec/instruction/v1.md) | Canonical validated worker input after downstream validation/mapping. |
 | [`validation.v1`](spec/validation/v1.md) | Append-only rejection evidence for input that cannot become a valid instruction. |
-| [`result.v1`](spec/result/v1.md) | Append-only run events, output, final answer, and errors. |
+| [`result.v1`](spec/result/v1.md) | Canonical append-only run events, output, final answer, and errors. |
 | [`session.v1`](spec/session/v1.md) | Rebuildable list/show projection, not a second authority. |
 | [status taxonomy v1](spec/status/v1.md) | Shared queued/running/terminal states and transitions. |
 
-Canonical, invalid, run, projection, and transition evidence lives under `spec/fixtures/` and is executed by `python3 -m unittest discover -s tests`.
+The compiler never writes `result.v1` or `session.v1`, and it never treats its acceptance envelope as a validated or executable worker row. Canonical, invalid, run, projection, and transition evidence lives under `spec/fixtures/` and is executed by the protocol contract tests.
 
-## What hq must do
+## Expected behavior
 
 | Behavior | Expected result |
 |---|---|
 | User starts a JSONL object | Required key suggestions appear |
 | User types a partial key or value | Context-valid low-noise candidates appear |
 | Candidate is displayed | Candidate includes edit intent and `compileDraft` |
-| Candidate is accepted | Only that accepted candidate becomes an instruction |
-| Candidate is not accepted | Nothing is written to the queue |
-| Schema changes | Suggestions change without hardcoding business keys in product code |
-| Linux/Windows terminal checks run | Literal Tab operation remains guarded by CI evidence |
+| `--complete`, `--context`, or `--draft` runs | Nothing is appended and no external process starts |
+| Candidate is accepted without `--queue` | Accepted instruction is returned; no durable row is added |
+| Candidate is accepted with `--queue` | Exactly one accepted compiler-envelope row is appended |
+| Schema data changes | Suggestions change without hard-coding business or target words in core |
+| Linux/Windows terminal checks run | Literal Tab operation and compiler boundary remain guarded by CI evidence |
 
 ## Vim boundary
 
-Vim is a thin client of the public `cmd/hq` contract. It may pass buffer/cursor/schema input, show completion or draft output, and explicitly accept one candidate to one queue path. Completion and draft are read-only; accept without `--queue` is also non-durable; accept with `--queue` appends exactly one row. Vim and `hq` do not start workers or target adapters.
+Vim is a thin client of the public `cmd/hq` contract. It may pass buffer, cursor, schema input, and an explicit queue path; display completion or draft output; and accept one candidate. Completion and draft are read-only. Accept without `--queue` is non-durable. Accept with `--queue` appends exactly one row. Neither Vim nor `hq` starts workers or target adapters.
 
-See `docs/vim-to-hq-contract.md` and `spec/fixtures/vim-hq.contract.jsonl`. The same contract proof runs against the official Linux and Windows binaries.
+See [`docs/vim-to-hq-contract.md`](docs/vim-to-hq-contract.md) and `spec/fixtures/vim-hq.contract.jsonl`. The same contract proof runs against the official Linux and Windows binaries.
 
-## Runtime and evidence status
+## Package ownership
 
-The official Go command path is `cmd/hq`, and the module name is `hq`.
+| Path | Responsibility |
+|---|---|
+| `internal/core` | Schema-independent compilation mechanics and protocol types |
+| `internal/boundary` | Abstract read/write ports |
+| `internal/adapter/current` | Current concrete JSONL vocabulary and file translation |
+| `internal/hq` | Compatibility surface using core types and adapter-owned world data; no execution |
+| `cmd/hq` | CLI, interactive compiler, explicit accepted-row append |
+| worker contract/core packages | Validation, policy, canonical result events, session projection, and dispatch preparation |
+| target adapters | Target-specific effects after worker validation and policy |
+| `spec/fixtures`, tests, and docs | Contract and review evidence |
 
-Python is labeled as tooling by `pyproject.toml` and `tools/README.md`.
+## Mechanical evidence
 
-Protocol contract rows live under `spec/fixtures/` and are checked by CI.
+- `internal/core/boundary_test.go` blocks concrete schema and target vocabulary from entering core source.
+- `internal/core/finalize_test.go` proves core preserves opaque adapter data and invents no default operation.
+- `internal/hq/execution_boundary_test.go` blocks process-launch APIs, raw syscall/cgo/plugin/linkname escape routes, PTY dependencies, and named execution adapters from compiler packages. Negative fixtures prove the guard fails closed.
+- `scripts/check.sh` runs Go tests plus all protocol contract tests, proves preview paths do not append, one accepted row appends exactly once, acceptance without a queue does not append, fake target executables on `PATH` are never invoked, and the Vim contract remains valid.
+- The official Linux and Windows workflows run the Go tests and terminal/Vim proof paths.
 
-Generated outputs are review evidence only. See `docs/boundary.md`.
-
-Review notes live under `docs/review.md` and `docs/evidence/README.md`. Root `PROOF.md` is now only a pointer note.
-
-## Reviewer readback
-
-A reviewer should be able to say:
-
-> `hq` is a Go terminal runtime for JSONL-aware autocomplete compilation. Its correctness is defined by protocol fixtures. Python is tooling. Linux and Windows terminal UX are protected by CI evidence. Generated outputs are evidence, not source authority.
-
-If the repo no longer supports that sentence, the cleanup is not complete.
-
-## Build
+## Build and check
 
 ```bash
 go test ./...
@@ -99,8 +106,16 @@ go build -o dist/hq-linux-amd64 ./cmd/hq
 GOOS=windows GOARCH=amd64 go build -o dist/hq-windows-amd64.exe ./cmd/hq
 ```
 
-Or:
+Or run the complete local proof:
 
 ```bash
 ./scripts/check.sh
 ```
+
+## Reviewer readback
+
+A reviewer should be able to say:
+
+> `hq` is a Go terminal compiler for JSONL-aware autocomplete and explicit acceptance. Concrete meaning stays in adapter-provided JSONL. Completion and draft paths have no durable side effects. Acceptance can append one compiler envelope, but `hq` cannot validate it as executable or execute it; a downstream worker owns canonical instruction validation, execution, and evidence.
+
+If the repository, tests, or CI no longer support that sentence, the boundary is broken.
