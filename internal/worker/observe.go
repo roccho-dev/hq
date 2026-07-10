@@ -328,9 +328,7 @@ func FollowRun(ctx context.Context, eventPath, runID string, follow bool, pollIn
 		timer := time.NewTimer(pollInterval)
 		select {
 		case <-ctx.Done():
-			if !timer.Stop() {
-				<-timer.C
-			}
+			timer.Stop()
 			return ctx.Err()
 		case <-timer.C:
 		}
