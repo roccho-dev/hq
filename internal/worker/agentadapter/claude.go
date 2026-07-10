@@ -87,8 +87,7 @@ func (a Claude) Run(ctx context.Context, request adapter.Request, emit adapter.E
 	case "logs":
 		return a.logs(ctx, runner, path, request, payload, emit)
 	case "attach":
-		text := fmt.Sprintf("Claude session target %s; attach interactively with: claude attach %s", payload.SessionID, payload.SessionID)
-		return adapter.Completion{FinalText: text, NativeSessionID: stringPointer(payload.SessionID)}, nil
+		return adapter.Completion{FinalText: "Claude attach target recorded", NativeSessionID: stringPointer(payload.SessionID)}, nil
 	default:
 		return adapter.Completion{}, blocked("invalid_payload", "unsupported Claude action")
 	}
