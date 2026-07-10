@@ -53,9 +53,6 @@ jobs:
           python-version: '3.12'
       - name: Regenerate lane L proof
         run: python scripts/check_worker_lane_l.py
-      - name: Retain composition source snapshot
-        if: always()
-        run: python -c "from pathlib import Path; d=Path('artifacts/worker-lane-l'); d.mkdir(parents=True, exist_ok=True); (d/'hq-worker-main.go').write_bytes(Path('cmd/hq-worker/main.go').read_bytes())"
       - name: Upload lane L proof
         if: always()
         uses: actions/upload-artifact@v4
