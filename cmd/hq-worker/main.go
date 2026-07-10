@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"hq/internal/worker"
-	"hq/internal/worker/adapter"
 	"hq/internal/workeraccept"
 	"hq/internal/workerclaim"
 )
@@ -134,7 +133,7 @@ func runWorker(args []string, stdout, stderr io.Writer) (exitCode int) {
 		writeCommandError(stderr, "approval_invalid", err.Error())
 		return 1
 	}
-	registry, err := adapter.NewRegistry()
+	registry, err := newRuntimeRegistry()
 	if err != nil {
 		writeCommandError(stderr, "registry_invalid", err.Error())
 		return 1

@@ -55,6 +55,19 @@ func fixture(t *testing.T, name string) []byte {
 	return raw
 }
 
+func TestShUsesDirectArgv(t *testing.T) {
+	runner := &script{t: t, steps: []step{{check: func(command Command) error {
+		if command.Path != "printf" || !reflect.DeepEqual(command.Args, []string{"%s", "; touch never"}) || len(command.Stdin) != 0 {
+			return errors.New("sh target did not preserve direct argv")
+		}
+		return nil
+	}, out: CommandResult{Stdout: []byte("; touch never")}}}}
+	got, err := (Sh{Runner: runner}).Run(context.Background(), req("sh", ShPayload{Argv: []string{"printf", "%s", "; touch never"}}, "."), nil)
+	if err != nil || got.FinalText != "; touch never" {
+		t.Fatalf("completion=%+v err=%v", got, err)
+	}
+}
+
 func TestHerdrActions(t *testing.T) {
 	noFocus := true
 	t.Run("start", func(t *testing.T) {
@@ -64,9 +77,9 @@ func TestHerdrActions(t *testing.T) {
 				return errors.New("unexpected Herdr start command")
 			}
 			return nil
-		}}}}
+		}, out: CommandResult{Stdout: []byte(`{"result":{"terminal_id":"term-7","pane_id":"w1:p2"}}`)}}}}
 		got, err := (Herdr{Runner: runner, Path: "herdr-test"}).Run(context.Background(), req("herdr", HerdrPayload{Action: "start", Name: "review", NoFocus: &noFocus, CommandArgv: []string{"claude", "-p"}, Prompt: "review"}, "/work"), nil)
-		if err != nil || got.NativeSessionID == nil || *got.NativeSessionID != "review" {
+		if err != nil || got.NativeSessionID == nil || *got.NativeSessionID != "term-7" {
 			t.Fatalf("completion=%+v err=%v", got, err)
 		}
 	})
@@ -75,13 +88,18 @@ func TestHerdrActions(t *testing.T) {
 			{out: CommandResult{}},
 			{out: CommandResult{Stdout: []byte("answer\n")}},
 		}}
-		got, err := (Herdr{Runner: runner}).Run(context.Background(), req("herdr", HerdrPayload{Action: "observe", Agent: "review", WaitStatus: "idle", TimeoutMS: 1000}, "."), nil)
-		if err != nil || got.FinalText != "answer" || !reflect.DeepEqual(runner.seen[0].Args, []string{"agent", "wait", "review", "--status", "idle", "--timeout", "1000"}) {
+		got, err := (Herdr{Runner: runner}).Run(context.Background(), req("herdr", HerdrPayload{Action: "observe", Agent: "term-7", WaitStatus: "idle", TimeoutMS: 1000}, "."), nil)
+		if err != nil || got.FinalText != "answer" || !reflect.DeepEqual(runner.seen[0].Args, []string{"agent", "wait", "term-7", "--status", "idle", "--timeout", "1000"}) {
 			t.Fatalf("completion=%+v seen=%+v err=%v", got, runner.seen, err)
 		}
-		attachRunner := &script{t: t}
-		got, err = (Herdr{Runner: attachRunner}).Run(context.Background(), req("herdr", HerdrPayload{Action: "attach", Agent: "review", Takeover: true}, "."), nil)
-		if err != nil || got.NativeSessionID == nil || *got.NativeSessionID != "review" || strings.Contains(got.FinalText, "herdr agent attach") || len(attachRunner.seen) != 0 {
+		attachRunner := &script{t: t, steps: []step{{check: func(command Command) error {
+			if !reflect.DeepEqual(command.Args, []string{"terminal", "session", "observe", "term-7"}) {
+				return errors.New("unexpected Herdr follow command")
+			}
+			return nil
+		}, out: CommandResult{Stdout: []byte("{\"type\":\"terminal.frame\",\"data\":\"cHJvb2Y=\"}\n")}, err: context.DeadlineExceeded}}}
+		got, err = (Herdr{Runner: attachRunner}).Run(context.Background(), req("herdr", HerdrPayload{Action: "attach", Agent: "term-7", TimeoutMS: 25}, "."), nil)
+		if err != nil || got.NativeSessionID == nil || *got.NativeSessionID != "term-7" || !strings.Contains(got.FinalText, "terminal.frame") || len(attachRunner.seen) != 1 {
 			t.Fatalf("completion=%+v seen=%+v err=%v", got, attachRunner.seen, err)
 		}
 	})
@@ -91,8 +109,8 @@ func TestCodexExecResumeAndParser(t *testing.T) {
 	root := t.TempDir()
 	runner := &script{t: t, steps: []step{{check: func(command Command) error {
 		path := valueAfter(command.Args, "--output-last-message")
-		if path == "" || !hasPair(command.Args, "--sandbox", "workspace-write") {
-			return errors.New("missing Codex output/sandbox argument")
+		if path == "" || !hasPair(command.Args, "--sandbox", "workspace-write") || command.Args[len(command.Args)-1] != "-" || string(command.Stdin) != "review" || has(command.Args, "review") {
+			return errors.New("missing exact Codex stdin/output/sandbox transport")
 		}
 		return os.WriteFile(path, []byte("final answer\n"), 0o644)
 	}, out: CommandResult{Stdout: fixture(t, "codex.events.jsonl")}}}}
@@ -101,8 +119,8 @@ func TestCodexExecResumeAndParser(t *testing.T) {
 		t.Fatalf("completion=%+v err=%v", got, err)
 	}
 	resume := &script{t: t, steps: []step{{check: func(command Command) error {
-		if !strings.Contains(strings.Join(command.Args, "\x00"), "resume\x00thread-1\x00continue") {
-			return errors.New("resume target missing")
+		if !strings.Contains(strings.Join(command.Args, "\x00"), "resume\x00thread-1\x00-") || string(command.Stdin) != "continue" || has(command.Args, "continue") {
+			return errors.New("resume target/stdin missing")
 		}
 		return os.WriteFile(valueAfter(command.Args, "--output-last-message"), []byte("continued"), 0o644)
 	}, out: CommandResult{Stdout: []byte("{\"type\":\"thread.started\",\"thread_id\":\"thread-1\"}\n")}}}}
@@ -118,12 +136,22 @@ func TestCodexExecResumeAndParser(t *testing.T) {
 }
 
 func TestClaudeActions(t *testing.T) {
-	printRunner := &script{t: t, steps: []step{{out: CommandResult{Stdout: fixture(t, "claude.result.json")}}}}
+	printRunner := &script{t: t, steps: []step{{check: func(command Command) error {
+		if string(command.Stdin) != "review" || has(command.Args, "review") || !reflect.DeepEqual(command.Args[:3], []string{"-p", "--output-format", "json"}) {
+			return errors.New("Claude print did not use exact stdin transport")
+		}
+		return nil
+	}, out: CommandResult{Stdout: fixture(t, "claude.result.json")}}}}
 	got, err := (Claude{Runner: printRunner}).Run(context.Background(), req("claude", ClaudePayload{Action: "print", Prompt: "review", MaxTurns: 3}, "."), nil)
 	if err != nil || got.FinalText != "answer" || got.NativeSessionID == nil || *got.NativeSessionID != "session-1" {
 		t.Fatalf("completion=%+v err=%v", got, err)
 	}
-	streamRunner := &script{t: t, steps: []step{{out: CommandResult{Stdout: fixture(t, "claude.stream.jsonl")}}}}
+	streamRunner := &script{t: t, steps: []step{{check: func(command Command) error {
+		if string(command.Stdin) != "continue" || has(command.Args, "continue") {
+			return errors.New("Claude resume prompt leaked into argv")
+		}
+		return nil
+	}, out: CommandResult{Stdout: fixture(t, "claude.stream.jsonl")}}}}
 	got, err = (Claude{Runner: streamRunner}).Run(context.Background(), req("claude", ClaudePayload{Action: "resume", Prompt: "continue", SessionID: "session-1", OutputFormat: "stream-json"}, "."), nil)
 	if err != nil || got.FinalText != "continued" || !hasPair(streamRunner.seen[0].Args, "--resume", "session-1") {
 		t.Fatalf("completion=%+v seen=%+v err=%v", got, streamRunner.seen, err)
