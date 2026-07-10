@@ -6,47 +6,40 @@ Issues: #49, #50, #51
 
 | generation | purpose | contribution |
 |---|---|---|
-| G0 scope | Define a replaceable adapter interface, explicit registry, and canonical output mapping. | Direct |
-| G1 runtime | Keep shell, Herdr, Codex, and Claude CLI details outside worker core. | Direct |
-| G2 evidence integrity | Keep run identity, sequence, time, lifecycle kind, and status worker-owned. | Direct |
-| G3 product | Add targets without rewiring core validation, ledger, or observation. | Direct |
-| G4 operations | Fail closed on unknown/unavailable targets and expose registry state in dry-run. | Direct |
-| G5 factory | Let target adapters be implemented independently against one transient boundary. | Direct |
-| G6 quality | Turn target drift, identity forgery, and second event protocols into test failures. | Direct |
-| G7 transfer | Remove tribal knowledge from dispatch and result mapping. | Indirect |
-| G8 due diligence | Make runtime boundaries and failure behavior reviewable from code and fixtures. | Indirect |
-| G9 asset value | Create a reusable low-cost target execution edge. | Indirect |
-| G10 meta | Reduce operating, handoff, and buyer integration risk. | Indirect |
-
-## One durable contract
-
-The worker contract SSOT remains:
-
-- `instruction.v1` for validated input;
-- `validation.v1` for rejected input before a run exists;
-- `result.v1` for every durable run event/output/error;
-- `session.v1` for rebuildable projection.
-
-The adapter layer defines no persisted event schema. Adapter values are transient and become durable only after the worker maps them into its existing `ResultRow` implementation of `result.v1`.
+| G0 scope | Define one replaceable worker-to-adapter port, one explicit registry, and one canonical output mapping. | Direct |
+| G1 runtime | Keep shell, Herdr, Codex, and Claude process details outside worker core. | Direct |
+| G2 evidence integrity | Prevent adapters from choosing event identity, order, time, or lifecycle meaning. | Direct |
+| G3 contract | Make merged `result.v1` the only durable run-output vocabulary. | Direct |
+| G4 product | Add or replace concrete adapters without changing worker evidence consumers. | Direct |
+| G5 operations | Fail closed for invalid targets and missing canonical adapters. | Direct |
+| G6 factory | Let adapter implementations progress independently against one small port. | Direct |
+| G7 quality | Turn schema drift, hidden aliases, and false completion into test failures. | Indirect |
+| G8 transfer | Make dispatch and evidence ownership understandable without chat or operator memory. | Indirect |
+| G9 due diligence | Give reviewers executable proof of the boundary and its destructive cases. | Indirect |
+| G10 meta | Reduce integration, handoff, and technical-DD risk in a saleable company. | Indirect |
 
 ## Boundary
 
 ```mermaid
 flowchart LR
-  subgraph worker["worker core"]
-    request["adapter.Request"]
-    registry["adapter.Registry"]
-    envelope["worker AdapterEnvelope"]
-    mapper["ResultForAdapterOutput / Completion / Error"]
-    result["canonical ResultRow result.v1"]
+  subgraph worker[worker core]
+    request[validated Request]
+    registry[Registry]
+    envelope[event_id + seq + recorded_at]
+    mapper[result.v1 mapper]
   end
 
-  subgraph targets["target adapters"]
-    sh["sh"]
-    herdr["Herdr"]
-    codex["Codex"]
-    claude["Claude"]
-    transient["Output / Completion / error"]
+  subgraph adapters[concrete adapters]
+    sh[sh]
+    herdr[Herdr]
+    codex[Codex]
+    claude[Claude]
+    transient[Output / Completion / error]
+  end
+
+  subgraph evidence[durable evidence]
+    result[result.v1 JSONL]
+    session[session.v1 projection]
   end
 
   request --> registry
@@ -58,60 +51,86 @@ flowchart LR
   herdr --> transient
   codex --> transient
   claude --> transient
-  transient --> mapper
   request --> mapper
   envelope --> mapper
+  transient --> mapper
   mapper --> result
+  result --> session
 ```
 
-## Adapter-owned transient data
+## Authority split
 
-| type | allowed fields | forbidden ownership |
+| owner | owns | does not own |
 |---|---|---|
-| `Request` | validated run/instruction/target/op/payload/cwd input | validation authority or persistence |
-| `Output` | stdout/stderr kind, message, optional native session id | event id, seq, time, status, result kind |
-| `Completion` | final text/path, optional native session id | completed status or durable final row |
-| error | ordinary error or typed failed/blocked detail | timeout/cancel lifecycle identity, event metadata |
+| adapter | target CLI/process/session details, streaming `Output`, terminal `Completion`, typed failure | durable event identity, sequence, time, result kind, status projection, persistence |
+| worker | validated request, registry selection, event envelope, mapping, append order | target command syntax or parser details |
+| `spec/result/v1.md` | durable result fields, kinds, final/error shapes, allowed targets | concrete execution implementation |
+| `session.v1` | rebuildable projection only | evidence authority |
 
-A completion with neither text nor path is rejected. Missing final output cannot silently become a successful `completed` row.
+There is no adapter-specific durable event row. `internal/worker/resultv1` is only the Go binding derived from the merged `spec/result/v1.md` contract and its canonical fixture.
 
-## Worker-owned mapping
+## Transient adapter port
 
-`AdapterEnvelope` supplies `event_id`, `seq`, and `recorded_at`. The validated request supplies `run_id`, `instruction_id`, and `target`. The worker mapper supplies canonical `result.v1` kind and fields:
+`Adapter.Run(context, Request, Emit) (Completion, error)` is the replaceable port.
 
-| transient source | canonical result kind |
-|---|---|
-| stdout output | `stdout` with `message` |
-| stderr output | `stderr` with `message` |
-| valid completion | `completed` with `final{text?,path?}` |
-| deadline | `timeout` with typed error |
-| cancellation | `cancelled` with typed error |
-| unavailable canonical adapter | `blocked(adapter_unavailable)` |
-| typed policy/adapter rejection | `blocked` or `failed` |
-| ordinary error | `failed(adapter_error)` |
-| malformed typed failure | `failed(protocol_error)` |
-
-No adapter can set identity, ordering, time, status, or final lifecycle kind because those fields do not exist in adapter-owned types.
+- `Request` carries validated run/instruction identity, canonical target, operation, payload, and optional working directory.
+- `Output` carries only `stdout` or `stderr`, its message, and an optional native session id.
+- `Completion` carries final text and/or final path plus an optional native session id.
+- A completion with neither text nor path is invalid. It cannot create a false `completed` row.
+- Adapters cannot provide `event_id`, `seq`, `recorded_at`, or a durable result kind.
 
 ## Registry rules
 
 - Registration is explicit and immutable after construction.
+- Only the four `instruction.v1` / `result.v1` targets are accepted: `sh`, `herdr`, `codex`, and `claude`.
 - Resolution is exact and case-sensitive.
 - There is no default adapter and no alias expansion.
-- Unknown instruction targets are rejected by worker validation as `validation.v1`.
-- A canonical target with no registered adapter returns `AdapterUnavailableError` and maps to `result.v1 blocked`.
-- Duplicate and nil registrations fail.
-- `Registry.Snapshot` returns a sorted list without executing adapters.
+- A non-canonical target remains input-validation evidence; it does not become a fabricated run.
+- A canonical target with no registered adapter returns `AdapterUnavailableError` and may map to canonical `blocked(adapter_unavailable)` evidence.
+- `Registry.Snapshot` returns the sorted registered target list without executing an adapter.
 
-## Proof
+## Canonical mapping
 
-- Adapter tests prove replaceability, exact canonical target resolution, alias/duplicate/unavailable rejection, and zero execution during lookup.
-- Transient-type tests prove adapters cannot carry durable envelope fields.
-- Worker mapper tests compare generated rows against four target rows copied exactly from the canonical `spec/fixtures/result.runs.jsonl` family.
-- Completion tests prove canonical `final{text,path}` mapping and rejection of empty completion.
-- Error tests prove timeout, cancellation, unavailable, blocked, generic failure, and malformed structured failure map to canonical terminal kinds.
-- A static test rejects any reintroduction of the retired parallel adapter event version in implementation, docs, or fixture files.
+| transient outcome | durable `result.v1` kind | durable detail |
+|---|---|---|
+| stdout output | `stdout` | `message` |
+| stderr output | `stderr` | `message` |
+| valid completion | `completed` | `final.text` and/or `final.path` |
+| typed execution failure | `failed` | `error` |
+| policy or missing-adapter block | `blocked` | `error` |
+| deadline | `timeout` | `error` |
+| cancellation | `cancelled` | `error` |
+
+The worker supplies `event_id`, `seq`, and UTC `recorded_at`. Request identity supplies `run_id`, `instruction_id`, and `target`. The adapter cannot overwrite either set.
+
+`accepted` and `started` are worker lifecycle events and are not adapter outputs.
+
+## Error behavior
+
+- Context deadline maps to canonical `timeout` with `deadline_exceeded`.
+- Context cancellation maps to canonical `cancelled`.
+- Missing canonical adapter maps to `blocked(adapter_unavailable)`.
+- Policy rejection maps to `blocked(policy_blocked)`.
+- A valid typed adapter failure preserves its canonical terminal kind and error detail.
+- A malformed typed failure maps to `failed(protocol_error)`.
+- An unknown target cannot be written as `result.v1`; upstream validation owns that rejection.
+
+## Mechanical proof
+
+`contract_test.go` proves:
+
+1. all four canonical targets resolve only when explicitly registered;
+2. aliases, case changes, duplicate targets, nil adapters, and unknown targets fail closed;
+3. registry inspection never runs an adapter;
+4. adapter data cannot carry durable envelope fields;
+5. missing final output cannot become a completed run;
+6. no parallel persisted adapter-event type remains in code or documentation;
+7. sh, Herdr, Codex, and Claude mappings are structurally equal to selected rows loaded directly from `spec/fixtures/result.runs.jsonl`;
+8. timeout and cancellation remain distinct canonical result kinds;
+9. malformed typed failures become explicit protocol failures.
+
+The full repository gate remains `bash scripts/check.sh`, which executes `go test ./...` and the Linux/Windows official hq proofs.
 
 ## Non-goals
 
-This change does not implement concrete target adapters, plugin discovery, UI rendering, accepted-ledger admission, or remote authority. It defines only the replaceable transient port, fail-closed registry, and worker-owned canonical result mapping.
+This change does not implement concrete target adapters, plugin discovery, UI rendering, accepted-ledger admission, or remote authority. It defines only the transient port, fail-closed registry, canonical mapper, and executable boundary proof.
