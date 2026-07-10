@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"hq/internal/worker/adapter"
@@ -30,9 +29,6 @@ func (p ShPayload) validate() error {
 		if strings.TrimSpace(value) == "" {
 			return blocked("invalid_payload", "sh argv must contain only non-empty strings")
 		}
-	}
-	if !filepath.IsAbs(p.Argv[0]) && !strings.ContainsAny(p.Argv[0], `/\`) {
-		return blocked("executable_path_required", "sh argv[0] must be an absolute or explicit relative path; PATH lookup is forbidden")
 	}
 	return nil
 }
@@ -64,6 +60,10 @@ func (a Sh) Run(ctx context.Context, request adapter.Request, emit adapter.Emit)
 		return adapter.Completion{}, err
 	}
 	if runErr != nil {
+		var structured *adapter.FailureError
+		if errors.As(runErr, &structured) {
+			return adapter.Completion{}, runErr
+		}
 		if errors.Is(runErr, context.DeadlineExceeded) || errors.Is(runErr, context.Canceled) {
 			return adapter.Completion{}, runErr
 		}
