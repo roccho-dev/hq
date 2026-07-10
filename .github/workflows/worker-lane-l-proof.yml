@@ -1,0 +1,62 @@
+name: Worker Lane L Whole Path Proof
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/worker-lane-l-proof.yml'
+      - 'cmd/hq/**'
+      - 'cmd/hq-worker/**'
+      - 'cmd/hq-worker-proof-provider/**'
+      - 'internal/worker/**'
+      - 'internal/workeraccept/**'
+      - 'internal/workerclaim/**'
+      - 'scripts/check_worker_lane_l.py'
+      - 'spec/**'
+      - 'tests/test_protocol_contract.py'
+  push:
+    branches:
+      - proposals
+    paths:
+      - '.github/workflows/worker-lane-l-proof.yml'
+      - 'cmd/hq/**'
+      - 'cmd/hq-worker/**'
+      - 'cmd/hq-worker-proof-provider/**'
+      - 'internal/worker/**'
+      - 'internal/workeraccept/**'
+      - 'internal/workerclaim/**'
+      - 'scripts/check_worker_lane_l.py'
+      - 'spec/**'
+      - 'tests/test_protocol_contract.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  whole-path-proof:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+          cache: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Regenerate lane L proof
+        run: python scripts/check_worker_lane_l.py
+      - name: Upload lane L proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: worker-lane-l-${{ runner.os }}
+          path: artifacts/worker-lane-l
+          if-no-files-found: error
