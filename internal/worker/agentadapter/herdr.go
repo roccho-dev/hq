@@ -108,11 +108,7 @@ func (a Herdr) Run(ctx context.Context, request adapter.Request, emit adapter.Em
 	case "observe":
 		return a.observe(ctx, runner, path, request, payload, emit)
 	case "attach":
-		command := fmt.Sprintf("herdr agent attach %s", payload.Agent)
-		if payload.Takeover {
-			command += " --takeover"
-		}
-		return adapter.Completion{FinalText: "Herdr attach target: " + command, NativeSessionID: stringPointer(payload.Agent)}, nil
+		return adapter.Completion{FinalText: "Herdr attach target recorded", NativeSessionID: stringPointer(payload.Agent)}, nil
 	default:
 		return adapter.Completion{}, blocked("invalid_payload", "unsupported Herdr action")
 	}
