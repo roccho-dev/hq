@@ -1,0 +1,11 @@
+{"id":"approved_exact_path","stage":"adapter","expected_terminal":"completed","expected_process_starts":1,"proof":"built helper receives literal argv and empty ambient environment"}
+{"id":"metacharacters_literal","stage":"adapter","expected_terminal":"completed","expected_process_starts":1,"proof":"semicolon pipe redirect glob variable and quoted values remain positional arguments"}
+{"id":"bare_name_path_lookup","stage":"adapter","expected_terminal":"blocked","expected_error":"executable_path_required","expected_process_starts":0}
+{"id":"missing_approval","stage":"common_policy","expected_terminal":"blocked","expected_error":"approval_required","expected_process_starts":0}
+{"id":"stale_approval","stage":"common_policy","expected_terminal":"blocked","expected_error":"approval_digest_mismatch","expected_process_starts":0}
+{"id":"cwd_escape","stage":"workspace_policy","expected_terminal":"blocked","expected_error":"cwd_outside_workspace","expected_process_starts":0}
+{"id":"nonzero_exit","stage":"adapter","expected_terminal":"failed","expected_error":"process_exit_nonzero","expected_process_starts":1}
+{"id":"deadline","stage":"adapter","expected_terminal":"timeout","expected_error":"deadline_exceeded","expected_process_starts":1,"partial_output":true}
+{"id":"explicit_cancel","stage":"adapter","expected_terminal":"cancelled","expected_error":"cancel_requested","expected_process_starts":1}
+{"id":"normal_duplicate","stage":"idempotency","expected_terminal":"validation.v1","expected_error":"duplicate_id","expected_additional_process_starts":0}
+{"id":"unknown_target","stage":"registry","expected_terminal":"blocked","expected_error":"adapter_unavailable","expected_process_starts":0}
