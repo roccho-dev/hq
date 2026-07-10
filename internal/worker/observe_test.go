@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -37,15 +38,23 @@ func TestBuildLedgerListsMixedTargetsNewestFirst(t *testing.T) {
 	if ledger[0].Op != "run" || ledger[0].Status != StatusFailed || ledger[0].NativeSessionID != native || ledger[0].Error == nil {
 		t.Fatalf("codex row=%+v", ledger[0])
 	}
+	if ledger[0].Summary != "run codex" {
+		t.Fatalf("failed run leaked instruction text: %+v", ledger[0])
+	}
 	if ledger[1].CWD != "work" || ledger[1].FinalPath != "out/run-sh/final.txt" || ledger[1].Summary != "hello" {
 		t.Fatalf("sh row=%+v", ledger[1])
 	}
 }
 
-func TestBuildRunDetailExplainsOneRunFromDurableRows(t *testing.T) {
+func TestBuildRunDetailExplainsOneRunWithoutInstructionText(t *testing.T) {
 	at := time.Date(2026, 7, 10, 6, 0, 0, 0, time.UTC)
 	native := "claude-session-1"
-	instruction := Instruction{ID: "ins-1", Version: InstructionVersionV1, Op: "run", Target: "claude", Payload: []byte(`{"prompt":"Summarize the final answer from durable evidence.","cwd":"."}`), CreatedAt: at.Format(time.RFC3339)}
+	reason := "SECRET-REASON"
+	instruction := Instruction{
+		ID: "ins-1", Version: InstructionVersionV1, Op: "run", Target: "claude",
+		Payload: []byte(`{"prompt":"SECRET-PROMPT","cwd":"."}`),
+		CreatedAt: at.Format(time.RFC3339), Reason: &reason, Labels: []string{"SECRET-LABEL"},
+	}
 	results := []ResultRow{
 		{EventID: "e0", Version: ResultVersionV1, RunID: "run-1", InstructionID: "ins-1", Target: "claude", Kind: ResultAccepted, Seq: 0, RecordedAt: at},
 		{EventID: "e1", Version: ResultVersionV1, RunID: "run-1", InstructionID: "ins-1", Target: "claude", Kind: ResultStarted, Seq: 1, RecordedAt: at.Add(time.Second), NativeSessionID: &native},
@@ -55,11 +64,20 @@ func TestBuildRunDetailExplainsOneRunFromDurableRows(t *testing.T) {
 	if err != nil || len(diagnostics) != 0 {
 		t.Fatalf("detail=%+v diagnostics=%+v err=%v", detail, diagnostics, err)
 	}
-	if detail.Instruction.Summary != "Summarize the final answer from durable evidence." || detail.Final == nil || detail.Final.Text != "final answer" {
+	if detail.Instruction.Summary != "run claude" || detail.Final == nil || detail.Final.Text != "final answer" {
 		t.Fatalf("detail=%+v", detail)
 	}
 	if !strings.Contains(detail.AttachHint, native) || len(detail.Events) != 3 {
 		t.Fatalf("detail=%+v", detail)
+	}
+	encoded, err := json.Marshal(detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"SECRET-PROMPT", "SECRET-REASON", "SECRET-LABEL"} {
+		if strings.Contains(string(encoded), secret) {
+			t.Fatalf("detail exposed %q: %s", secret, encoded)
+		}
 	}
 }
 
