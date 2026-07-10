@@ -103,7 +103,11 @@ assert len(ledger) == 4, ledger
 assert {row["target"] for row in ledger} == {"sh", "herdr", "codex", "claude"}, ledger
 assert all(row["version"] == "worker.ledger.v1" for row in ledger), ledger
 assert all(row["status"] == "blocked" and row["last_kind"] == "blocked" for row in ledger), ledger
-assert ledger == sorted(ledger, key=lambda row: (row["last_event_at"], row["run_id"]), reverse=True), ledger
+for previous, current in zip(ledger, ledger[1:]):
+    assert previous["last_event_at"] > current["last_event_at"] or (
+        previous["last_event_at"] == current["last_event_at"]
+        and previous["run_id"] < current["run_id"]
+    ), ledger
 
 show = json.loads((root / "show.json").read_text())
 assert show["version"] == "worker.run-detail.v1", show
