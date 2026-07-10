@@ -1,0 +1,1 @@
+{"kind":"accepted.instruction","queue":"instruction.jsonl","instruction":{"id":"ins-accepted-fixture-001","version":"instruction.v1","op":"run","target":"sh","payload":{"argv":["printf","fixture"],"cwd":"."},"created_at":"2026-07-10T06:00:00Z","reason":"reviewed accepted envelope fixture"},"reason":"line accepted by human"}
