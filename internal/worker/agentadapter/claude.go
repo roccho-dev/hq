@@ -98,7 +98,7 @@ func (a Claude) print(ctx context.Context, runner Runner, path string, request a
 	if format == "" {
 		format = "json"
 	}
-	args := []string{"-p", payload.Prompt, "--output-format", format}
+	args := []string{"-p", "--output-format", format}
 	if format == "stream-json" {
 		args = append(args, "--verbose")
 	}
@@ -111,7 +111,7 @@ func (a Claude) print(ctx context.Context, runner Runner, path string, request a
 	if payload.Bare {
 		args = append(args, "--bare")
 	}
-	result, runErr := runner.Run(ctx, Command{Path: path, Args: args, Dir: effectiveDir(request, payload.CWD)})
+	result, runErr := runner.Run(ctx, Command{Path: path, Args: args, Dir: effectiveDir(request, payload.CWD), Stdin: []byte(payload.Prompt)})
 	if emitErr := emitStderr(result, payload.SessionID, emit); emitErr != nil {
 		return adapter.Completion{}, emitErr
 	}
