@@ -2,6 +2,10 @@ package agentadapter
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"hq/internal/worker/adapter"
@@ -27,6 +31,9 @@ func (p ShPayload) validate() error {
 			return blocked("invalid_payload", "sh argv must contain only non-empty strings")
 		}
 	}
+	if !filepath.IsAbs(p.Argv[0]) && !strings.ContainsAny(p.Argv[0], `/\`) {
+		return blocked("executable_path_required", "sh argv[0] must be an absolute or explicit relative path; PATH lookup is forbidden")
+	}
 	return nil
 }
 
@@ -43,7 +50,7 @@ func (a Sh) Run(ctx context.Context, request adapter.Request, emit adapter.Emit)
 	}
 	runner := a.Runner
 	if runner == nil {
-		runner = OSRunner{}
+		runner = DirectOSRunner{}
 	}
 	result, runErr := runner.Run(ctx, Command{
 		Path: payload.Argv[0],
@@ -57,7 +64,19 @@ func (a Sh) Run(ctx context.Context, request adapter.Request, emit adapter.Emit)
 		return adapter.Completion{}, err
 	}
 	if runErr != nil {
-		return adapter.Completion{}, runErr
+		if errors.Is(runErr, context.DeadlineExceeded) || errors.Is(runErr, context.Canceled) {
+			return adapter.Completion{}, runErr
+		}
+		var exitErr *exec.ExitError
+		if errors.As(runErr, &exitErr) {
+			return adapter.Completion{}, &adapter.FailureError{
+				Class: adapter.FailureFailed, Code: "process_exit_nonzero",
+				Message: fmt.Sprintf("process exited with status %d", exitErr.ExitCode()),
+			}
+		}
+		return adapter.Completion{}, &adapter.FailureError{
+			Class: adapter.FailureFailed, Code: "process_start_failed", Message: runErr.Error(),
+		}
 	}
 	finalText := strings.TrimSpace(string(result.Stdout))
 	if finalText == "" {
