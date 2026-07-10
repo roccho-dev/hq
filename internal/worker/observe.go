@@ -50,14 +50,16 @@ type InstructionSummary struct {
 	Labels    []string `json:"labels,omitempty"`
 }
 
-// RunDetail is a transient, rebuildable read model for one run.
+// RunDetail is a transient, rebuildable read model for one run. Error is an
+// in-memory alias of Run.Error for text rendering and is excluded from JSON so
+// the wire representation has one structured error field.
 type RunDetail struct {
 	Version     string             `json:"version"`
 	Run         LedgerRow          `json:"run"`
 	Instruction InstructionSummary `json:"instruction"`
 	Events      []ResultRow        `json:"events"`
 	Final       *FinalResult       `json:"final,omitempty"`
-	Error       *ResultError       `json:"error,omitempty"`
+	Error       *ResultError       `json:"-"`
 	AttachHint  string             `json:"attach_hint,omitempty"`
 }
 
@@ -183,6 +185,23 @@ func BuildRunDetail(runID string, instructions []Instruction, results []ResultRo
 		}
 	}
 	if selected == nil {
+		hasRunEvidence := false
+		for _, row := range results {
+			if row.RunID == runID {
+				hasRunEvidence = true
+				break
+			}
+		}
+		if hasRunEvidence {
+			message := fmt.Sprintf("run %q has invalid or unlinked durable evidence", runID)
+			for _, diagnostic := range diagnostics {
+				if diagnostic.Field == runID {
+					message = diagnostic.Message
+					break
+				}
+			}
+			return RunDetail{}, diagnostics, &ObservationError{Code: "invalid_run_evidence", Message: message}
+		}
 		return RunDetail{}, diagnostics, &ObservationError{
 			Code:    "run_not_found",
 			Message: fmt.Sprintf("run %q was not found in durable evidence", runID),
@@ -206,15 +225,13 @@ func BuildRunDetail(runID string, instructions []Instruction, results []ResultRo
 		Run:         *selected,
 		Instruction: summarizeInstruction(instruction),
 		Events:      events,
+		Error:       selected.Error,
 	}
 	for index := len(events) - 1; index >= 0; index-- {
-		if detail.Final == nil && events[index].Final != nil {
+		if events[index].Final != nil {
 			copyValue := *events[index].Final
 			detail.Final = &copyValue
-		}
-		if detail.Error == nil && events[index].Error != nil {
-			copyValue := *events[index].Error
-			detail.Error = &copyValue
+			break
 		}
 	}
 	if selected.NativeSessionID != "" {
@@ -327,11 +344,8 @@ func summarizeRun(instruction Instruction, events []ResultRow) string {
 		if row.Final != nil && strings.TrimSpace(row.Final.Text) != "" {
 			return compactSummary(row.Final.Text, 160)
 		}
-		if row.Message != nil && strings.TrimSpace(*row.Message) != "" {
+		if (row.Kind == ResultStdout || row.Kind == ResultStderr) && row.Message != nil && strings.TrimSpace(*row.Message) != "" {
 			return compactSummary(*row.Message, 160)
-		}
-		if row.Error != nil && strings.TrimSpace(row.Error.Message) != "" {
-			return compactSummary(row.Error.Message, 160)
 		}
 	}
 	return instructionPayloadSummary(instruction)
