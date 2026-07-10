@@ -246,7 +246,8 @@ func BuildRunDetail(runID string, instructions []Instruction, results []ResultRo
 
 // FollowRun emits current and newly appended result rows for one known run. It
 // uses a bounded rescan rather than filesystem notifications so a lost
-// notification cannot permanently hide a durable event.
+// notification cannot permanently hide a durable event. Rows already emitted
+// must remain byte-equivalent canonical JSON throughout the follow operation.
 func FollowRun(ctx context.Context, eventPath, runID string, follow bool, pollInterval time.Duration, emit func(ResultRow) error) error {
 	if strings.TrimSpace(runID) == "" {
 		return &ObservationError{Code: "run_id_required", Message: "run id is required"}
@@ -258,7 +259,7 @@ func FollowRun(ctx context.Context, eventPath, runID string, follow bool, pollIn
 		pollInterval = 250 * time.Millisecond
 	}
 
-	nextSeq := 0
+	seenRows := make([]string, 0)
 	firstScan := true
 	for {
 		data, err := LoadEventFile(eventPath)
@@ -280,24 +281,41 @@ func FollowRun(ctx context.Context, eventPath, runID string, follow bool, pollIn
 		}
 		firstScan = false
 
+		if len(events) < len(seenRows) {
+			return &ObservationError{
+				Code:    "run_evidence_truncated",
+				Message: fmt.Sprintf("run %q durable evidence shrank from %d rows to %d", runID, len(seenRows), len(events)),
+			}
+		}
 		if len(events) != 0 {
 			if _, _, diagnostics := projectRunState(events); len(diagnostics) != 0 {
 				return &ObservationError{Code: "invalid_run_evidence", Message: diagnostics[0].Message}
 			}
-			for _, row := range events {
-				if row.Seq < nextSeq {
+			for index, row := range events {
+				encoded, err := json.Marshal(row)
+				if err != nil {
+					return err
+				}
+				canonical := string(encoded)
+				if index < len(seenRows) {
+					if seenRows[index] != canonical {
+						return &ObservationError{
+							Code:    "run_evidence_changed",
+							Message: fmt.Sprintf("run %q durable evidence changed at seq %d", runID, row.Seq),
+						}
+					}
 					continue
 				}
-				if row.Seq != nextSeq {
+				if row.Seq != len(seenRows) {
 					return &ObservationError{
 						Code:    "non_contiguous_seq",
-						Message: fmt.Sprintf("run %q expected seq %d, got %d", runID, nextSeq, row.Seq),
+						Message: fmt.Sprintf("run %q expected seq %d, got %d", runID, len(seenRows), row.Seq),
 					}
 				}
 				if err := emit(row); err != nil {
 					return err
 				}
-				nextSeq++
+				seenRows = append(seenRows, canonical)
 			}
 			if isTerminalResultKind(events[len(events)-1].Kind) {
 				return nil
