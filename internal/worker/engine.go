@@ -36,6 +36,9 @@ func (e Engine) Plan(row ReadRow, validation []Diagnostic) PlanRow {
 	if len(validation) != 0 {
 		return plan
 	}
+	if digest, err := InstructionDigest(row.Instruction); err == nil {
+		plan.InstructionDigest = digest
+	}
 	plan.Policy = e.Policy.Evaluate(row.Instruction)
 	if plan.Policy.Allowed {
 		plan.Decision = PlanAccepted
@@ -60,9 +63,8 @@ func (e Engine) DryRun(rows []ReadRow, w io.Writer) (blocked int, err error) {
 }
 
 // EvaluateNormal records validation.v1 and result.v1 rows but never calls a
-// target adapter. Concrete dispatch belongs to the adapter lane. Every valid
-// row therefore reaches a durable accepted->blocked run until a registry is
-// wired in a later slice.
+// target adapter. Concrete dispatch belongs to Runner. Every valid row reaches
+// a durable accepted->blocked run when this compatibility path is used.
 func (e Engine) EvaluateNormal(rows []ReadRow, prior LogData, replay bool) []LogEntry {
 	now := e.Now
 	if now == nil {
