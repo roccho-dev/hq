@@ -8,13 +8,7 @@ import (
 	"hq/internal/worker/agentadapter"
 )
 
-func init() {
-	if err := adapter.InstallRuntimeDefaults(runtimeRegistrations); err != nil {
-		panic(err)
-	}
-}
-
-func runtimeRegistrations() []adapter.Registration {
+func newRuntimeRegistry() (*adapter.Registry, error) {
 	runner := agentadapter.OSRunner{}
 	registrations := []adapter.Registration{{Target: "sh", Adapter: agentadapter.Sh{Runner: runner}}}
 	registrations = append(registrations, agentadapter.Registrations(agentadapter.Config{
@@ -23,7 +17,7 @@ func runtimeRegistrations() []adapter.Registration {
 		CodexPath:  executablePath("HQ_CODEX_PATH", "codex"),
 		ClaudePath: executablePath("HQ_CLAUDE_PATH", "claude"),
 	})...)
-	return registrations
+	return adapter.NewRegistry(registrations...)
 }
 
 func executablePath(environmentKey, fallback string) string {
