@@ -1,0 +1,4 @@
+{"id":"ins-sh-001","version":"instruction.v1","op":"run","target":"sh","payload":{"argv":["printf","hello\n"],"cwd":"."},"created_at":"2026-07-10T04:00:00Z"}
+{"id":"ins-herdr-001","version":"instruction.v1","op":"run","target":"herdr","payload":{"prompt":"Inspect the issue and return evidence.","cwd":"."},"created_at":"2026-07-10T04:01:00Z"}
+{"id":"ins-codex-001","version":"instruction.v1","op":"run","target":"codex","payload":{"prompt":"Validate worker contract fixtures.","cwd":"."},"created_at":"2026-07-10T04:02:00Z"}
+{"id":"ins-claude-001","version":"instruction.v1","op":"run","target":"claude","payload":{"prompt":"Summarize JSONL evidence.","cwd":"."},"created_at":"2026-07-10T04:03:00Z"}
