@@ -3,9 +3,9 @@ set -euo pipefail
 
 mkdir -p artifacts/worker-core
 
-go test ./internal/worker ./cmd/hq-worker
-go test -race ./internal/worker
-go vet ./internal/worker ./cmd/hq-worker
+go test ./internal/worker ./cmd/hq-worker 2>&1 | tee artifacts/worker-core/go-test.log
+go test -race ./internal/worker 2>&1 | tee artifacts/worker-core/go-race.log
+go vet ./internal/worker ./cmd/hq-worker 2>&1 | tee artifacts/worker-core/go-vet.log
 go build -o artifacts/worker-core/hq-worker-linux-amd64 ./cmd/hq-worker
 GOOS=windows GOARCH=amd64 go build -o artifacts/worker-core/hq-worker-windows-amd64.exe ./cmd/hq-worker
 
