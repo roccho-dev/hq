@@ -23,7 +23,7 @@ type Policy struct {
 func DefaultPolicy(workspaceRoot string) Policy {
 	return Policy{
 		WorkspaceRoot:  workspaceRoot,
-		AllowedTargets: map[string]struct{}{"sh": {}, "herdr": {}, "codex": {}, "claude": {}},
+		AllowedTargets: map[string]struct{}{"sh": {}, "herdr": {}, "codex": {}, "claude": {}, "host": {}},
 		DeniedTargets:  map[string]struct{}{},
 		DeniedOps:      map[string]struct{}{},
 		AllowedEnv:     map[string]struct{}{"CI": {}, "LANG": {}, "LC_ALL": {}, "NO_COLOR": {}, "TERM": {}},
