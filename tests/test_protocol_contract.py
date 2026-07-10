@@ -22,25 +22,11 @@ ALLOWED_TRANSITIONS = {
 INSTRUCTION_REQUIRED = {"id", "version", "op", "target", "payload", "created_at"}
 INSTRUCTION_OPTIONAL = {"reason", "policy", "reply_to", "labels"}
 RESULT_REQUIRED = {
-    "event_id",
-    "version",
-    "run_id",
-    "instruction_id",
-    "target",
-    "kind",
-    "seq",
-    "recorded_at",
+    "event_id", "version", "run_id", "instruction_id", "target", "kind", "seq", "recorded_at"
 }
 RESULT_OPTIONAL = {"message", "final", "error", "native_session_id"}
 SESSION_REQUIRED = {
-    "version",
-    "run_id",
-    "instruction_id",
-    "target",
-    "status",
-    "cwd",
-    "started_at",
-    "last_event_at",
+    "version", "run_id", "instruction_id", "target", "status", "cwd", "started_at", "last_event_at"
 }
 SESSION_OPTIONAL = {"native_session_id", "final_path"}
 KIND_STATUS = {
@@ -62,6 +48,10 @@ def is_non_empty_string(value):
     return isinstance(value, str) and bool(value.strip())
 
 
+def is_positive_int(value):
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
 def is_rfc3339_utc(value):
     if not is_non_empty_string(value) or not value.endswith("Z"):
         return False
@@ -70,6 +60,139 @@ def is_rfc3339_utc(value):
     except ValueError:
         return False
     return True
+
+
+def has_only(payload, allowed):
+    return not (set(payload) - set(allowed))
+
+
+def valid_optional_string(payload, key):
+    return key not in payload or is_non_empty_string(payload[key])
+
+
+def valid_optional_bool(payload, key):
+    return key not in payload or isinstance(payload[key], bool)
+
+
+def valid_optional_positive_int(payload, key):
+    return key not in payload or is_positive_int(payload[key])
+
+
+def validate_herdr_payload(payload):
+    action = payload.get("action")
+    if action == "start":
+        if not has_only(payload, {"action", "cwd", "name", "no_focus", "split", "command_argv", "prompt"}):
+            return False
+        argv = payload.get("command_argv")
+        return (
+            isinstance(argv, list)
+            and bool(argv)
+            and all(is_non_empty_string(item) for item in argv)
+            and is_non_empty_string(payload.get("name"))
+            and is_non_empty_string(payload.get("prompt"))
+            and valid_optional_string(payload, "cwd")
+            and valid_optional_bool(payload, "no_focus")
+            and payload.get("split", "right") in {"right", "down"}
+        )
+    if action == "read":
+        return (
+            has_only(payload, {"action", "cwd", "agent", "source", "lines"})
+            and is_non_empty_string(payload.get("agent"))
+            and valid_optional_string(payload, "cwd")
+            and payload.get("source", "recent-unwrapped") in {"visible", "recent", "recent-unwrapped", "detection"}
+            and valid_optional_positive_int(payload, "lines")
+        )
+    if action == "observe":
+        return (
+            has_only(payload, {"action", "cwd", "agent", "source", "lines", "wait_status", "timeout_ms"})
+            and is_non_empty_string(payload.get("agent"))
+            and valid_optional_string(payload, "cwd")
+            and payload.get("source", "recent-unwrapped") in {"visible", "recent", "recent-unwrapped", "detection"}
+            and payload.get("wait_status", "idle") in {"idle", "working", "blocked", "unknown"}
+            and valid_optional_positive_int(payload, "lines")
+            and valid_optional_positive_int(payload, "timeout_ms")
+        )
+    if action == "attach":
+        return (
+            has_only(payload, {"action", "cwd", "agent", "takeover"})
+            and is_non_empty_string(payload.get("agent"))
+            and valid_optional_string(payload, "cwd")
+            and valid_optional_bool(payload, "takeover")
+        )
+    return False
+
+
+def validate_codex_payload(payload):
+    action = payload.get("action")
+    allowed = {"action", "prompt", "cwd", "session_id", "output_path", "sandbox", "skip_git_repo_check"}
+    if action not in {"exec", "resume"} or not has_only(payload, allowed):
+        return False
+    if not is_non_empty_string(payload.get("prompt")) or not valid_optional_string(payload, "cwd"):
+        return False
+    if not valid_optional_string(payload, "output_path") or not valid_optional_bool(payload, "skip_git_repo_check"):
+        return False
+    if payload.get("sandbox", "") not in {"", "read-only", "workspace-write", "danger-full-access"}:
+        return False
+    if action == "resume":
+        return is_non_empty_string(payload.get("session_id"))
+    return "session_id" not in payload
+
+
+def validate_claude_payload(payload):
+    action = payload.get("action")
+    common = {"action", "cwd"}
+    if not valid_optional_string(payload, "cwd"):
+        return False
+    if action == "print":
+        allowed = common | {"prompt", "max_turns", "output_format", "bare"}
+        return (
+            has_only(payload, allowed)
+            and is_non_empty_string(payload.get("prompt"))
+            and valid_optional_positive_int(payload, "max_turns")
+            and payload.get("output_format", "json") in {"json", "stream-json"}
+            and valid_optional_bool(payload, "bare")
+        )
+    if action == "resume":
+        allowed = common | {"prompt", "session_id", "max_turns", "output_format", "bare"}
+        return (
+            has_only(payload, allowed)
+            and is_non_empty_string(payload.get("prompt"))
+            and is_non_empty_string(payload.get("session_id"))
+            and valid_optional_positive_int(payload, "max_turns")
+            and payload.get("output_format", "json") in {"json", "stream-json"}
+            and valid_optional_bool(payload, "bare")
+        )
+    if action == "background":
+        return (
+            has_only(payload, common | {"prompt", "name"})
+            and is_non_empty_string(payload.get("prompt"))
+            and valid_optional_string(payload, "name")
+        )
+    if action in {"logs", "attach"}:
+        return has_only(payload, common | {"session_id"}) and is_non_empty_string(payload.get("session_id"))
+    return False
+
+
+def validate_target_payload(target, payload):
+    if not isinstance(payload, dict):
+        return False
+    if target == "sh":
+        if not has_only(payload, {"argv", "cwd"}):
+            return False
+        argv = payload.get("argv")
+        return (
+            isinstance(argv, list)
+            and bool(argv)
+            and all(is_non_empty_string(item) for item in argv)
+            and valid_optional_string(payload, "cwd")
+        )
+    if target == "herdr":
+        return validate_herdr_payload(payload)
+    if target == "codex":
+        return validate_codex_payload(payload)
+    if target == "claude":
+        return validate_claude_payload(payload)
+    return False
 
 
 def validate_instruction(row):
@@ -100,22 +223,7 @@ def validate_instruction(row):
         return "invalid_labels"
     if "policy" in row and row["policy"] != {}:
         return "unsupported_policy"
-
-    payload = row["payload"]
-    if not isinstance(payload, dict):
-        return "invalid_payload"
-    if row["target"] == "sh":
-        if set(payload) - {"argv", "cwd"}:
-            return "invalid_payload"
-        argv = payload.get("argv")
-        if not isinstance(argv, list) or not argv or any(not is_non_empty_string(item) for item in argv):
-            return "invalid_payload"
-    else:
-        if set(payload) - {"prompt", "cwd"}:
-            return "invalid_payload"
-        if not is_non_empty_string(payload.get("prompt")):
-            return "invalid_payload"
-    if "cwd" in payload and not is_non_empty_string(payload["cwd"]):
+    if not validate_target_payload(row["target"], row["payload"]):
         return "invalid_payload"
     return None
 
@@ -174,14 +282,12 @@ def validate_result(row):
         return "invalid_recorded_at"
     if "native_session_id" in row and not is_non_empty_string(row["native_session_id"]):
         return "invalid_native_session_id"
-
     kind = row["kind"]
     if kind in {"stdout", "stderr"}:
         if not isinstance(row.get("message"), str):
             return "missing_message"
     elif "message" in row:
         return "unexpected_message"
-
     if kind == "completed":
         final = row.get("final")
         if not isinstance(final, dict) or set(final) - {"text", "path"}:
@@ -190,7 +296,6 @@ def validate_result(row):
             return "invalid_final"
     elif "final" in row:
         return "unexpected_final"
-
     if kind in {"failed", "blocked", "timeout", "cancelled"}:
         if not validate_error(row.get("error")):
             return "invalid_error"
