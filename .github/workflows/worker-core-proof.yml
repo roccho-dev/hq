@@ -71,8 +71,8 @@ jobs:
 
           python -c "import json,pathlib; p=pathlib.Path(r'$plan'); rows=[json.loads(x) for x in p.read_text(encoding='utf-8-sig').splitlines() if x]; assert len(rows)==4 and all(x['decision']=='accepted' for x in rows)"
           python -c "import json,pathlib; p=pathlib.Path(r'$events'); rows=[json.loads(x) for x in p.read_text(encoding='utf-8-sig').splitlines() if x]; assert len(rows)==8 and sum(x.get('kind')=='blocked' for x in rows)==4"
-          python -c "import json,pathlib; rows=[json.loads(x) for x in pathlib.Path(r'$ledger').read_text(encoding='utf-8-sig').splitlines() if x]; assert len(rows)==4 and {x['target'] for x in rows}=={'sh','herdr','codex','claude'} and all(x['version']=='worker.ledger.v1' and x['status']=='blocked' for x in rows)"
-          python -c "import json,pathlib; row=json.loads(pathlib.Path(r'$show').read_text(encoding='utf-8-sig')); assert row['version']=='worker.run-detail.v1' and row['run']['run_id']==r'$runId' and row['error']['code']=='adapter_unavailable'"
+          python -c "import json,pathlib; rows=[json.loads(x) for x in pathlib.Path(r'$ledger').read_text(encoding='utf-8-sig').splitlines() if x]; assert len(rows)==4 and {x['target'] for x in rows}=={'sh','herdr','codex','claude'} and all(x['version']=='worker.ledger.v1' and x['status']=='blocked' for x in rows) and len({x['summary'] for x in rows})==4"
+          python -c "import json,pathlib; row=json.loads(pathlib.Path(r'$show').read_text(encoding='utf-8-sig')); assert row['version']=='worker.run-detail.v1' and row['run']['run_id']==r'$runId' and row['run']['error']['code']=='adapter_unavailable' and 'error' not in row"
           python -c "import json,pathlib; rows=[json.loads(x) for x in pathlib.Path(r'$tail').read_text(encoding='utf-8-sig').splitlines() if x]; assert [x['kind'] for x in rows]==['accepted','blocked'] and rows[-1]['run_id']==r'$runId'"
       - uses: actions/upload-artifact@v4
         if: always()
