@@ -10,10 +10,10 @@ trap 'rm -rf "$work"' EXIT
 mkdir -p "$artifact_root"
 
 go test ./internal/workeraccept ./internal/workerclaim ./internal/worker ./cmd/hq-worker 2>&1 | tee "$artifact_root/go-test.log"
-go build -o "$artifact_root/hq-linux-amd64" ./cmd/hq
-go build -o "$artifact_root/hq-worker-linux-amd64" ./cmd/hq-worker
-GOOS=windows GOARCH=amd64 go build -o "$artifact_root/hq-windows-amd64.exe" ./cmd/hq
-GOOS=windows GOARCH=amd64 go build -o "$artifact_root/hq-worker-windows-amd64.exe" ./cmd/hq-worker
+go build -o "$artifact_root/hq-linux-amd64" ./cmd/hq 2>&1 | tee "$artifact_root/go-build-hq-linux.log"
+go build -o "$artifact_root/hq-worker-linux-amd64" ./cmd/hq-worker 2>&1 | tee "$artifact_root/go-build-worker-linux.log"
+GOOS=windows GOARCH=amd64 go build -o "$artifact_root/hq-windows-amd64.exe" ./cmd/hq 2>&1 | tee "$artifact_root/go-build-hq-windows.log"
+GOOS=windows GOARCH=amd64 go build -o "$artifact_root/hq-worker-windows-amd64.exe" ./cmd/hq-worker 2>&1 | tee "$artifact_root/go-build-worker-windows.log"
 
 instruction='{"id":"ins-actual-hq-001","version":"instruction.v1","op":"run","target":"sh","payload":{"argv":["printf","actual-hq"],"cwd":"."},"created_at":"2026-07-10T06:30:00Z","reason":"binary-level accepted bridge proof","labels":["m","integration"]}'
 accepted="$work/accepted.jsonl"
