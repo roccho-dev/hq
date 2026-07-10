@@ -82,6 +82,7 @@ func LoadInstructionsForObservation(path string) ([]Instruction, []Diagnostic, e
 		return nil, nil, err
 	}
 	defer f.Close()
+
 	rows, err := ReadInstructions(path, f)
 	if err != nil {
 		return nil, nil, err
@@ -119,11 +120,16 @@ func BuildLedger(instructions []Instruction, results []ResultRow) ([]LedgerRow, 
 	for _, row := range results {
 		byRun[row.RunID] = append(byRun[row.RunID], row)
 	}
+
 	ledger := make([]LedgerRow, 0, len(projection))
 	for _, session := range projection {
 		instruction, ok := byInstruction[session.InstructionID]
 		if !ok {
-			diagnostics = append(diagnostics, Diagnostic{Code: "unknown_instruction", Field: session.RunID, Message: "ledger row requires linked durable instruction evidence"})
+			diagnostics = append(diagnostics, Diagnostic{
+				Code:    "unknown_instruction",
+				Field:   session.RunID,
+				Message: "ledger row requires linked durable instruction evidence",
+			})
 			continue
 		}
 		events := append([]ResultRow(nil), byRun[session.RunID]...)
@@ -140,8 +146,8 @@ func BuildLedger(instructions []Instruction, results []ResultRow) ([]LedgerRow, 
 			LastEventAt:     session.LastEventAt,
 			NativeSessionID: session.NativeSessionID,
 			LastKind:        session.LastKind,
-			FinalPath:       session.FinalPath,
 			Summary:         summarizeRun(instruction, events),
+			FinalPath:       session.FinalPath,
 		}
 		for index := len(events) - 1; index >= 0; index-- {
 			if events[index].Error != nil {
@@ -152,6 +158,7 @@ func BuildLedger(instructions []Instruction, results []ResultRow) ([]LedgerRow, 
 		}
 		ledger = append(ledger, row)
 	}
+
 	sort.SliceStable(ledger, func(i, j int) bool {
 		if ledger[i].LastEventAt.Equal(ledger[j].LastEventAt) {
 			return ledger[i].RunID < ledger[j].RunID
@@ -176,8 +183,12 @@ func BuildRunDetail(runID string, instructions []Instruction, results []ResultRo
 		}
 	}
 	if selected == nil {
-		return RunDetail{}, diagnostics, &ObservationError{Code: "run_not_found", Message: fmt.Sprintf("run %q was not found in durable evidence", runID)}
+		return RunDetail{}, diagnostics, &ObservationError{
+			Code:    "run_not_found",
+			Message: fmt.Sprintf("run %q was not found in durable evidence", runID),
+		}
 	}
+
 	byInstruction := make(map[string]Instruction, len(instructions))
 	for _, instruction := range instructions {
 		byInstruction[instruction.ID] = instruction
@@ -207,14 +218,18 @@ func BuildRunDetail(runID string, instructions []Instruction, results []ResultRo
 		}
 	}
 	if selected.NativeSessionID != "" {
-		detail.AttachHint = fmt.Sprintf("native session %s is available; use the %s adapter's documented read or attach surface", selected.NativeSessionID, selected.Target)
+		detail.AttachHint = fmt.Sprintf(
+			"native session %s is available; use the %s adapter's documented read or attach surface",
+			selected.NativeSessionID,
+			selected.Target,
+		)
 	}
 	return detail, diagnostics, nil
 }
 
-// FollowRun emits current and newly appended result rows for one run. It uses a
-// bounded rescan rather than filesystem notifications so a lost notification
-// cannot permanently hide a durable event.
+// FollowRun emits current and newly appended result rows for one known run. It
+// uses a bounded rescan rather than filesystem notifications so a lost
+// notification cannot permanently hide a durable event.
 func FollowRun(ctx context.Context, eventPath, runID string, follow bool, pollInterval time.Duration, emit func(ResultRow) error) error {
 	if strings.TrimSpace(runID) == "" {
 		return &ObservationError{Code: "run_id_required", Message: "run id is required"}
@@ -225,8 +240,9 @@ func FollowRun(ctx context.Context, eventPath, runID string, follow bool, pollIn
 	if pollInterval <= 0 {
 		pollInterval = 250 * time.Millisecond
 	}
+
 	nextSeq := 0
-	seenRun := false
+	firstScan := true
 	for {
 		data, err := LoadEventFile(eventPath)
 		if err != nil {
@@ -239,8 +255,15 @@ func FollowRun(ctx context.Context, eventPath, runID string, follow bool, pollIn
 			}
 		}
 		sort.Slice(events, func(i, j int) bool { return events[i].Seq < events[j].Seq })
+		if firstScan && len(events) == 0 {
+			return &ObservationError{
+				Code:    "run_not_found",
+				Message: fmt.Sprintf("run %q was not found in durable evidence", runID),
+			}
+		}
+		firstScan = false
+
 		if len(events) != 0 {
-			seenRun = true
 			if _, _, diagnostics := projectRunState(events); len(diagnostics) != 0 {
 				return &ObservationError{Code: "invalid_run_evidence", Message: diagnostics[0].Message}
 			}
@@ -249,7 +272,10 @@ func FollowRun(ctx context.Context, eventPath, runID string, follow bool, pollIn
 					continue
 				}
 				if row.Seq != nextSeq {
-					return &ObservationError{Code: "non_contiguous_seq", Message: fmt.Sprintf("run %q expected seq %d, got %d", runID, nextSeq, row.Seq)}
+					return &ObservationError{
+						Code:    "non_contiguous_seq",
+						Message: fmt.Sprintf("run %q expected seq %d, got %d", runID, nextSeq, row.Seq),
+					}
 				}
 				if err := emit(row); err != nil {
 					return err
@@ -261,11 +287,9 @@ func FollowRun(ctx context.Context, eventPath, runID string, follow bool, pollIn
 			}
 		}
 		if !follow {
-			if !seenRun {
-				return &ObservationError{Code: "run_not_found", Message: fmt.Sprintf("run %q was not found in durable evidence", runID)}
-			}
 			return nil
 		}
+
 		timer := time.NewTimer(pollInterval)
 		select {
 		case <-ctx.Done():
