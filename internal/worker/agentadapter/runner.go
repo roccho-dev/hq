@@ -1,5 +1,6 @@
-// Package agentadapter implements concrete transient adapters for Herdr,
-// Codex, and Claude. Durable identity and lifecycle remain worker-owned.
+// Package agentadapter implements concrete transient adapters for direct argv,
+// Herdr, Codex, and Claude execution. Durable identity and lifecycle remain
+// worker-owned.
 package agentadapter
 
 import (
@@ -10,9 +11,10 @@ import (
 )
 
 type Command struct {
-	Path string
-	Args []string
-	Dir  string
+	Path  string
+	Args  []string
+	Dir   string
+	Stdin []byte
 }
 
 type CommandResult struct {
@@ -35,9 +37,15 @@ type OSRunner struct{}
 func (OSRunner) Run(ctx context.Context, command Command) (CommandResult, error) {
 	cmd := exec.CommandContext(ctx, command.Path, command.Args...)
 	cmd.Dir = command.Dir
+	if len(command.Stdin) != 0 {
+		cmd.Stdin = bytes.NewReader(command.Stdin)
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = io.Writer(&stdout)
 	cmd.Stderr = io.Writer(&stderr)
 	err := cmd.Run()
+	if contextErr := ctx.Err(); contextErr != nil {
+		err = contextErr
+	}
 	return CommandResult{Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}, err
 }
