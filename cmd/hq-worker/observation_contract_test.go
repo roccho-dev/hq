@@ -227,9 +227,10 @@ func writeTwoRunObservationFixture(t *testing.T) (input, events, newestRun strin
 	retryable := false
 	rows := []worker.ResultRow{
 		{EventID: "old-0", Version: worker.ResultVersionV1, RunID: "run-old", InstructionID: "ins-old", Target: "sh", Kind: worker.ResultAccepted, Seq: 0, RecordedAt: at},
-		{EventID: "old-1", Version: worker.ResultVersionV1, RunID: "run-old", InstructionID: "ins-old", Target: "sh", Kind: worker.ResultCompleted, Seq: 1, RecordedAt: at.Add(time.Second), Final: &worker.FinalResult{Text: "old"}},
-		{EventID: "new-0", Version: worker.ResultVersionV1, RunID: "run-new", InstructionID: "ins-new", Target: "claude", Kind: worker.ResultAccepted, Seq: 0, RecordedAt: at.Add(2 * time.Second)},
-		{EventID: "new-1", Version: worker.ResultVersionV1, RunID: "run-new", InstructionID: "ins-new", Target: "claude", Kind: worker.ResultBlocked, Seq: 1, RecordedAt: at.Add(3 * time.Second), Error: &worker.ResultError{Code: "approval_required", Message: "approval is required", Retryable: &retryable}},
+		{EventID: "old-1", Version: worker.ResultVersionV1, RunID: "run-old", InstructionID: "ins-old", Target: "sh", Kind: worker.ResultStarted, Seq: 1, RecordedAt: at.Add(time.Second)},
+		{EventID: "old-2", Version: worker.ResultVersionV1, RunID: "run-old", InstructionID: "ins-old", Target: "sh", Kind: worker.ResultCompleted, Seq: 2, RecordedAt: at.Add(2 * time.Second), Final: &worker.FinalResult{Text: "old"}},
+		{EventID: "new-0", Version: worker.ResultVersionV1, RunID: "run-new", InstructionID: "ins-new", Target: "claude", Kind: worker.ResultAccepted, Seq: 0, RecordedAt: at.Add(3 * time.Second)},
+		{EventID: "new-1", Version: worker.ResultVersionV1, RunID: "run-new", InstructionID: "ins-new", Target: "claude", Kind: worker.ResultBlocked, Seq: 1, RecordedAt: at.Add(4 * time.Second), Error: &worker.ResultError{Code: "approval_required", Message: "approval is required", Retryable: &retryable}},
 	}
 	for _, row := range rows {
 		if err := log.Append(worker.ResultEntry(row)); err != nil {
