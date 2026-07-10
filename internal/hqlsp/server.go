@@ -4,7 +4,7 @@ package hqlsp
 
 import (
 	"bufio"
-	"crypto/sha256"
+	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -201,23 +201,56 @@ func (s *Server) executeCommand(w io.Writer, msg message) error {
 	if !ok || doc.Version != arg.Version {
 		return writeError(w, msg.ID, -32602, "document version is missing or stale")
 	}
-	draft := hq.CompileLine(doc.Text, s.world)
-	encoded, err := json.Marshal(draft)
+	draft, acceptedID, err := finalizeExplicitAcceptance(hq.CompileLine(doc.Text, s.world))
 	if err != nil {
 		return writeError(w, msg.ID, -32603, err.Error())
 	}
 	if err := appendAndSync(s.profile.AcceptedPath, draft); err != nil {
 		return writeError(w, msg.ID, -32603, err.Error())
 	}
-	digest := sha256.Sum256(encoded)
 	result := map[string]any{
 		"kind": SubmitResultKind,
 		"status": "queued",
 		"queueKind": draft.Kind,
-		"queueId": "accepted-sha256-" + hex.EncodeToString(digest[:8]),
+		"queueId": acceptedID,
 		"deploymentId": s.profile.DeploymentID,
 	}
 	return writeMessage(w, message{JSONRPC: "2.0", ID: msg.ID, Result: result})
+}
+
+func finalizeExplicitAcceptance(draft hq.CompileDraft) (hq.CompileDraft, string, error) {
+	encoded, err := json.Marshal(draft)
+	if err != nil {
+		return hq.CompileDraft{}, "", err
+	}
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &envelope); err != nil {
+		return hq.CompileDraft{}, "", err
+	}
+	var instruction map[string]any
+	if err := json.Unmarshal(envelope["instruction"], &instruction); err != nil {
+		return hq.CompileDraft{}, "", errors.New("compile draft has no canonical instruction object")
+	}
+	random := make([]byte, 16)
+	if _, err := rand.Read(random); err != nil {
+		return hq.CompileDraft{}, "", fmt.Errorf("generate accepted instruction identity: %w", err)
+	}
+	acceptedID := "ins-lsp-" + hex.EncodeToString(random)
+	instruction["id"] = acceptedID
+	instructionJSON, err := json.Marshal(instruction)
+	if err != nil {
+		return hq.CompileDraft{}, "", err
+	}
+	envelope["instruction"] = instructionJSON
+	finalJSON, err := json.Marshal(envelope)
+	if err != nil {
+		return hq.CompileDraft{}, "", err
+	}
+	var final hq.CompileDraft
+	if err := json.Unmarshal(finalJSON, &final); err != nil {
+		return hq.CompileDraft{}, "", err
+	}
+	return final, acceptedID, nil
 }
 
 func (s *Server) publishDiagnostics(w io.Writer, uri string) error {
