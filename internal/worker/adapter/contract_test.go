@@ -76,8 +76,8 @@ func TestTransientAdapterDataCannotCarryDurableEnvelopeFields(t *testing.T) {
 		Output     Output
 		Completion Completion
 	}{
-		Request:    Request{RunID: "run-1", InstructionID: "ins-1", Target: "sh", Operation: "run", Payload: json.RawMessage(`{}`)},
-		Output:     Output{Kind: OutputStdout, Message: "hello"},
+		Request: Request{RunID: "run-1", InstructionID: "ins-1", Target: "sh", Operation: "run", Payload: json.RawMessage(`{}`)},
+		Output: Output{Kind: OutputStdout, Message: "hello"},
 		Completion: Completion{FinalText: "done"},
 	})
 	if err != nil {
