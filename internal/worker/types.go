@@ -5,6 +5,8 @@ package worker
 import (
 	"encoding/json"
 	"time"
+
+	"hq/internal/workersafety"
 )
 
 const (
@@ -89,16 +91,17 @@ type PolicyDecision struct {
 }
 
 type PlanRow struct {
-	Version         string         `json:"version"`
-	Source          SourceRef      `json:"source"`
-	InstructionID   string         `json:"instruction_id,omitempty"`
-	Target          string         `json:"target,omitempty"`
-	Op              string         `json:"op,omitempty"`
-	ExpectedAdapter string         `json:"expected_adapter,omitempty"`
-	Payload         PayloadSummary `json:"payload"`
-	Decision        string         `json:"decision"`
-	Validation      []Diagnostic   `json:"validation_errors,omitempty"`
-	Policy          PolicyDecision `json:"policy"`
+	Version           string         `json:"version"`
+	Source            SourceRef      `json:"source"`
+	InstructionID     string         `json:"instruction_id,omitempty"`
+	InstructionDigest string         `json:"instruction_digest,omitempty"`
+	Target            string         `json:"target,omitempty"`
+	Op                string         `json:"op,omitempty"`
+	ExpectedAdapter   string         `json:"expected_adapter,omitempty"`
+	Payload           PayloadSummary `json:"payload"`
+	Decision          string         `json:"decision"`
+	Validation        []Diagnostic   `json:"validation_errors,omitempty"`
+	Policy            PolicyDecision `json:"policy"`
 }
 
 // ValidationRow is the canonical validation.v1 rejection evidence. Source path
@@ -142,14 +145,19 @@ type ResultRow struct {
 type LogEntry struct {
 	Validation *ValidationRow
 	Result     *ResultRow
+	Policy     *workersafety.PolicyDecision
 }
 
 func ValidationEntry(row ValidationRow) LogEntry { return LogEntry{Validation: &row} }
 func ResultEntry(row ResultRow) LogEntry         { return LogEntry{Result: &row} }
+func PolicyEntry(row workersafety.PolicyDecision) LogEntry {
+	return LogEntry{Policy: &row}
+}
 
 type LogData struct {
 	Validations []ValidationRow
 	Results     []ResultRow
+	Policies    []workersafety.PolicyDecision
 }
 
 type RunProjection struct {
