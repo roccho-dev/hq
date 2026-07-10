@@ -103,6 +103,7 @@ assert len(ledger) == 4, ledger
 assert {row["target"] for row in ledger} == {"sh", "herdr", "codex", "claude"}, ledger
 assert all(row["version"] == "worker.ledger.v1" for row in ledger), ledger
 assert all(row["status"] == "blocked" and row["last_kind"] == "blocked" for row in ledger), ledger
+assert len({row["summary"] for row in ledger}) == 4, ledger
 for previous, current in zip(ledger, ledger[1:]):
     assert previous["last_event_at"] > current["last_event_at"] or (
         previous["last_event_at"] == current["last_event_at"]
@@ -113,7 +114,8 @@ show = json.loads((root / "show.json").read_text())
 assert show["version"] == "worker.run-detail.v1", show
 assert show["run"]["run_id"] == ledger[0]["run_id"], show
 assert show["run"]["status"] == "blocked", show
-assert show["error"]["code"] == "adapter_unavailable", show
+assert show["run"]["error"]["code"] == "adapter_unavailable", show
+assert "error" not in show, show
 assert len(show["events"]) == 2, show
 
 tail = [json.loads(line) for line in (root / "tail.jsonl").read_text().splitlines() if line]
