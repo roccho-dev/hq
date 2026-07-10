@@ -42,19 +42,38 @@ jobs:
           go test ./internal/worker ./cmd/hq-worker
           go vet ./internal/worker ./cmd/hq-worker
           go build -o artifacts\worker-core\hq-worker-windows-amd64.exe ./cmd/hq-worker
-      - name: Prove Windows dry-run and fail-closed normal mode
+      - name: Prove Windows processing and observation
         shell: pwsh
         run: |
           $queue = "internal\worker\testdata\valid.jsonl"
           $events = "artifacts\worker-core\events-windows.jsonl"
           $plan = "artifacts\worker-core\plan-windows.jsonl"
           $normal = "artifacts\worker-core\normal-windows.jsonl"
+          $ledger = "artifacts\worker-core\ledger-windows.jsonl"
+          $show = "artifacts\worker-core\show-windows.json"
+          $tail = "artifacts\worker-core\tail-windows.jsonl"
+
           & .\artifacts\worker-core\hq-worker-windows-amd64.exe --input $queue --events $events --workspace . --dry-run | Set-Content -Encoding utf8 $plan
           if (Test-Path $events) { throw "dry-run created an evidence file" }
+
           & .\artifacts\worker-core\hq-worker-windows-amd64.exe --input $queue --events $events --workspace . | Set-Content -Encoding utf8 $normal
           if ($LASTEXITCODE -ne 2) { throw "normal mode must fail closed with exit 2 before adapters exist" }
+
+          & .\artifacts\worker-core\hq-worker-windows-amd64.exe list --input $queue --events $events --json | Set-Content -Encoding utf8 $ledger
+          if ($LASTEXITCODE -ne 0) { throw "worker list failed" }
+          $runId = python -c "import json,pathlib; rows=[json.loads(x) for x in pathlib.Path(r'$ledger').read_text(encoding='utf-8-sig').splitlines() if x]; assert len(rows)==4; print(rows[0]['run_id'])"
+
+          & .\artifacts\worker-core\hq-worker-windows-amd64.exe show --input $queue --events $events --run $runId --json | Set-Content -Encoding utf8 $show
+          if ($LASTEXITCODE -ne 0) { throw "worker show failed" }
+
+          & .\artifacts\worker-core\hq-worker-windows-amd64.exe tail --events $events --run $runId --follow=false --json | Set-Content -Encoding utf8 $tail
+          if ($LASTEXITCODE -ne 0) { throw "worker tail failed" }
+
           python -c "import json,pathlib; p=pathlib.Path(r'$plan'); rows=[json.loads(x) for x in p.read_text(encoding='utf-8-sig').splitlines() if x]; assert len(rows)==4 and all(x['decision']=='accepted' for x in rows)"
           python -c "import json,pathlib; p=pathlib.Path(r'$events'); rows=[json.loads(x) for x in p.read_text(encoding='utf-8-sig').splitlines() if x]; assert len(rows)==8 and sum(x.get('kind')=='blocked' for x in rows)==4"
+          python -c "import json,pathlib; rows=[json.loads(x) for x in pathlib.Path(r'$ledger').read_text(encoding='utf-8-sig').splitlines() if x]; assert len(rows)==4 and {x['target'] for x in rows}=={'sh','herdr','codex','claude'} and all(x['version']=='worker.ledger.v1' and x['status']=='blocked' for x in rows)"
+          python -c "import json,pathlib; row=json.loads(pathlib.Path(r'$show').read_text(encoding='utf-8-sig')); assert row['version']=='worker.run-detail.v1' and row['run']['run_id']==r'$runId' and row['error']['code']=='adapter_unavailable'"
+          python -c "import json,pathlib; rows=[json.loads(x) for x in pathlib.Path(r'$tail').read_text(encoding='utf-8-sig').splitlines() if x]; assert [x['kind'] for x in rows]==['accepted','blocked'] and rows[-1]['run_id']==r'$runId'"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
