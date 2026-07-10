@@ -36,18 +36,17 @@ type LedgerRow struct {
 	Error           *ResultError `json:"error,omitempty"`
 }
 
-// InstructionSummary exposes enough instruction context to understand a run
-// without returning the full target payload by default.
+// InstructionSummary exposes structural request context without returning
+// arbitrary payload, reason, or label text before an input-redaction contract
+// exists.
 type InstructionSummary struct {
-	ID        string   `json:"id"`
-	Target    string   `json:"target"`
-	Op        string   `json:"op"`
-	CWD       string   `json:"cwd"`
-	CreatedAt string   `json:"created_at"`
-	Summary   string   `json:"summary"`
-	Reason    string   `json:"reason,omitempty"`
-	ReplyTo   string   `json:"reply_to,omitempty"`
-	Labels    []string `json:"labels,omitempty"`
+	ID        string `json:"id"`
+	Target    string `json:"target"`
+	Op        string `json:"op"`
+	CWD       string `json:"cwd"`
+	CreatedAt string `json:"created_at"`
+	Summary   string `json:"summary"`
+	ReplyTo   string `json:"reply_to,omitempty"`
 }
 
 // RunDetail is a transient, rebuildable read model for one run. Error is an
@@ -342,11 +341,7 @@ func summarizeInstruction(instruction Instruction) InstructionSummary {
 		Op:        instruction.Op,
 		CWD:       instructionCWD(instruction),
 		CreatedAt: instruction.CreatedAt,
-		Summary:   instructionPayloadSummary(instruction),
-		Labels:    append([]string(nil), instruction.Labels...),
-	}
-	if instruction.Reason != nil {
-		summary.Reason = *instruction.Reason
+		Summary:   instructionStructuralSummary(instruction),
 	}
 	if instruction.ReplyTo != nil {
 		summary.ReplyTo = *instruction.ReplyTo
@@ -364,25 +359,10 @@ func summarizeRun(instruction Instruction, events []ResultRow) string {
 			return compactSummary(*row.Message, 160)
 		}
 	}
-	return instructionPayloadSummary(instruction)
+	return instructionStructuralSummary(instruction)
 }
 
-func instructionPayloadSummary(instruction Instruction) string {
-	var payload struct {
-		Prompt string   `json:"prompt"`
-		Argv   []string `json:"argv"`
-	}
-	if json.Unmarshal(instruction.Payload, &payload) == nil {
-		if strings.TrimSpace(payload.Prompt) != "" {
-			return compactSummary(payload.Prompt, 160)
-		}
-		if len(payload.Argv) != 0 {
-			return compactSummary(strings.Join(payload.Argv, " "), 160)
-		}
-	}
-	if instruction.Reason != nil {
-		return compactSummary(*instruction.Reason, 160)
-	}
+func instructionStructuralSummary(instruction Instruction) string {
 	return instruction.Op + " " + instruction.Target
 }
 
