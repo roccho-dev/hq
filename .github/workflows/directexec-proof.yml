@@ -1,0 +1,173 @@
+name: Direct executable proof
+
+on:
+  pull_request:
+  push:
+    branches:
+      - proposals
+      - main
+      - "proposal/**"
+
+jobs:
+  linux-directexec:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Prove direct executable through built worker
+        run: bash scripts/check-directexec.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hq-directexec-linux-proof
+          path: artifacts/directexec
+          if-no-files-found: error
+
+  windows-directexec:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Test, vet, and build direct executable path
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts\directexec-windows | Out-Null
+          go test -count=1 -v ./internal/worker/directexec ./internal/worker 2>&1 | Tee-Object -FilePath artifacts\directexec-windows\go-test.log
+          if ($LASTEXITCODE -ne 0) { throw "directexec tests failed" }
+          go vet ./internal/worker/directexec ./internal/worker ./cmd/hq-worker ./cmd/hq-worker-fixture 2>&1 | Tee-Object -FilePath artifacts\directexec-windows\go-vet.log
+          if ($LASTEXITCODE -ne 0) { throw "directexec vet failed" }
+          go build -o artifacts\directexec-windows\hq-worker-windows-amd64.exe ./cmd/hq-worker
+          go build -o artifacts\directexec-windows\hq-worker-fixture-windows-amd64.exe ./cmd/hq-worker-fixture
+      - name: Prove Windows built worker direct execution and duplicate safety
+        shell: pwsh
+        run: |
+          $root = "artifacts\directexec-windows"
+          $project = Join-Path $root "project"
+          $queue = Join-Path $root "instructions.jsonl"
+          $approvals = Join-Path $root "approvals.jsonl"
+          $events = Join-Path $project ".hq\events\events.jsonl"
+          $sentinel = Join-Path $project "sentinel.txt"
+          $argsFile = Join-Path $project "args.json"
+          $plan = Join-Path $root "plan.jsonl"
+          $normal = Join-Path $root "normal.jsonl"
+          $duplicate = Join-Path $root "duplicate.jsonl"
+          $ledger = Join-Path $root "ledger.jsonl"
+          $show = Join-Path $root "show.json"
+          $tail = Join-Path $root "tail.jsonl"
+          $worker = (Resolve-Path (Join-Path $root "hq-worker-windows-amd64.exe")).Path
+          $helper = (Resolve-Path (Join-Path $root "hq-worker-fixture-windows-amd64.exe")).Path
+          $secret = "sk-bbbbbbbbbbbbbbbbbbbbbbbb"
+          New-Item -ItemType Directory -Force (Split-Path $events) | Out-Null
+
+          @'
+          import json
+          import sys
+          from pathlib import Path
+          queue, helper, sentinel, args_file, secret = sys.argv[1:]
+          row = {
+              "id": "ins-directexec-windows-001",
+              "version": "instruction.v1",
+              "op": "run",
+              "target": "sh",
+              "payload": {
+                  "argv": [
+                      helper,
+                      "--stdout", "token=" + secret,
+                      "--stderr", "windows-warning",
+                      "--sentinel", sentinel,
+                      "--args-file", args_file,
+                      "--",
+                      ";", "|", ">", "*", "$HOME", "%PATH%", '"quoted"', "space value",
+                  ],
+                  "cwd": ".",
+              },
+              "created_at": "2026-07-10T07:35:00Z",
+              "reason": "G Windows direct executable proof",
+              "labels": ["g", "directexec", "windows"],
+          }
+          Path(queue).write_text(json.dumps(row, separators=(",", ":")) + "\n", encoding="utf-8")
+          '@ | Set-Content -Encoding utf8 (Join-Path $root "make_queue.py")
+          python (Join-Path $root "make_queue.py") $queue $helper $sentinel $argsFile $secret
+          if ($LASTEXITCODE -ne 0) { throw "queue generation failed" }
+
+          & $worker --input $queue --events $events --workspace $project --dry-run | Set-Content -Encoding utf8 $plan
+          if ($LASTEXITCODE -ne 0) { throw "directexec dry-run failed" }
+          if (Test-Path $events) { throw "dry-run created events" }
+
+          @'
+          import json
+          import sys
+          from pathlib import Path
+          rows = [json.loads(line) for line in Path(sys.argv[1]).read_text(encoding="utf-8-sig").splitlines() if line]
+          assert len(rows) == 1, rows
+          approval = {
+              "version": "worker.approval.v1",
+              "instruction_id": rows[0]["instruction_id"],
+              "approved": True,
+              "approved_by": "g-windows-proof",
+              "instruction_digest": rows[0]["instruction_digest"],
+          }
+          Path(sys.argv[2]).write_text(json.dumps(approval, separators=(",", ":")) + "\n", encoding="utf-8")
+          '@ | Set-Content -Encoding utf8 (Join-Path $root "make_approval.py")
+          python (Join-Path $root "make_approval.py") $plan $approvals
+          if ($LASTEXITCODE -ne 0) { throw "approval generation failed" }
+
+          & $worker --input $queue --events $events --approvals $approvals --workspace $project --worker-id g-windows | Set-Content -Encoding utf8 $normal
+          if ($LASTEXITCODE -ne 0) { throw "approved direct process failed" }
+          if (Test-Path (Join-Path $project ".hq\worker\claim.json")) { throw "normal shutdown left claim" }
+
+          & $worker --input $queue --events $events --approvals $approvals --workspace $project --worker-id g-windows-duplicate | Set-Content -Encoding utf8 $duplicate
+          if ($LASTEXITCODE -ne 2) { throw "duplicate run must exit 2" }
+          if (Test-Path (Join-Path $project ".hq\worker\claim.json")) { throw "duplicate path left claim" }
+
+          & $worker list --input $queue --events $events --json | Set-Content -Encoding utf8 $ledger
+          if ($LASTEXITCODE -ne 0) { throw "list failed" }
+          $runId = python -c "import json,pathlib; rows=[json.loads(x) for x in pathlib.Path(r'$ledger').read_text(encoding='utf-8-sig').splitlines() if x]; assert len(rows)==1; print(rows[0]['run_id'])"
+          & $worker show --input $queue --events $events --run $runId --json | Set-Content -Encoding utf8 $show
+          if ($LASTEXITCODE -ne 0) { throw "show failed" }
+          & $worker tail --events $events --run $runId --follow=false --json | Set-Content -Encoding utf8 $tail
+          if ($LASTEXITCODE -ne 0) { throw "tail failed" }
+
+          @'
+          import json
+          import sys
+          from pathlib import Path
+          normal_path, duplicate_path, events_path, ledger_path, show_path, tail_path, sentinel_path, args_path = map(Path, sys.argv[1:9])
+          secret = sys.argv[9]
+          normal = [json.loads(line) for line in normal_path.read_text(encoding="utf-8-sig").splitlines() if line]
+          duplicate = [json.loads(line) for line in duplicate_path.read_text(encoding="utf-8-sig").splitlines() if line]
+          evidence = [json.loads(line) for line in events_path.read_text(encoding="utf-8-sig").splitlines() if line]
+          ledger = [json.loads(line) for line in ledger_path.read_text(encoding="utf-8-sig").splitlines() if line]
+          show = json.loads(show_path.read_text(encoding="utf-8-sig"))
+          tail = [json.loads(line) for line in tail_path.read_text(encoding="utf-8-sig").splitlines() if line]
+          args = json.loads(args_path.read_text(encoding="utf-8-sig"))
+          assert [row.get("kind") for row in normal] == ["worker.policy.v1", "accepted", "started", "stdout", "stderr", "completed"], normal
+          assert normal[0]["may_dispatch"] is True and normal[-1]["final"]["text"] == "process exited successfully with status 0", normal
+          assert len(duplicate) == 1 and duplicate[0]["error"]["code"] == "duplicate_id", duplicate
+          assert [row.get("kind") for row in evidence if row.get("version") == "result.v1"] == ["accepted", "started", "stdout", "stderr", "completed"], evidence
+          assert secret not in normal_path.read_text(encoding="utf-8-sig") and secret not in events_path.read_text(encoding="utf-8-sig")
+          assert sentinel_path.read_text(encoding="utf-8-sig") == "started\n"
+          assert args == [";", "|", ">", "*", "$HOME", "%PATH%", '"quoted"', "space value"], args
+          assert len(ledger) == 1 and ledger[0]["status"] == "completed", ledger
+          assert show["run"]["status"] == "completed" and show["final"]["text"] == "process exited successfully with status 0", show
+          assert [row["kind"] for row in tail] == ["accepted", "started", "stdout", "stderr", "completed"], tail
+          '@ | Set-Content -Encoding utf8 (Join-Path $root "verify.py")
+          python (Join-Path $root "verify.py") $normal $duplicate $events $ledger $show $tail $sentinel $argsFile $secret
+          if ($LASTEXITCODE -ne 0) { throw "Windows directexec proof verification failed" }
+          "direct executable Windows proof passed" | Set-Content -Encoding utf8 (Join-Path $root "result.txt")
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hq-directexec-windows-proof
+          path: artifacts/directexec-windows
+          if-no-files-found: error
