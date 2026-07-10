@@ -81,7 +81,7 @@ func TestHerdrActions(t *testing.T) {
 		}
 		attachRunner := &script{t: t}
 		got, err = (Herdr{Runner: attachRunner}).Run(context.Background(), req("herdr", HerdrPayload{Action: "attach", Agent: "review", Takeover: true}, "."), nil)
-		if err != nil || !strings.Contains(got.FinalText, "--takeover") || len(attachRunner.seen) != 0 {
+		if err != nil || got.NativeSessionID == nil || *got.NativeSessionID != "review" || strings.Contains(got.FinalText, "herdr agent attach") || len(attachRunner.seen) != 0 {
 			t.Fatalf("completion=%+v seen=%+v err=%v", got, attachRunner.seen, err)
 		}
 	})
@@ -140,7 +140,7 @@ func TestClaudeActions(t *testing.T) {
 	}
 	attach := &script{t: t}
 	got, err = (Claude{Runner: attach}).Run(context.Background(), req("claude", ClaudePayload{Action: "attach", SessionID: "session-1"}, "."), nil)
-	if err != nil || !strings.Contains(got.FinalText, "claude attach session-1") || len(attach.seen) != 0 {
+	if err != nil || got.NativeSessionID == nil || *got.NativeSessionID != "session-1" || strings.Contains(got.FinalText, "claude attach") || len(attach.seen) != 0 {
 		t.Fatalf("completion=%+v seen=%+v err=%v", got, attach.seen, err)
 	}
 }
