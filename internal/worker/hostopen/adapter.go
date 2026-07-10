@@ -1,5 +1,92 @@
 package hostopen
-import("bytes";"context";"encoding/json";"errors";"fmt";"os";"os/exec";"path/filepath";"strings";"hq/internal/capability";"hq/internal/worker/adapter")
-type Adapter struct{binding capability.Binding};func New(b capability.Binding)(*Adapter,error){if err:=b.Validate(b.DeploymentID);err!=nil{return nil,err};if err:=b.VerifyExecutable();err!=nil{return nil,err};return &Adapter{b},nil}
-func(a *Adapter)Run(ctx context.Context,r adapter.Request,_ adapter.Emit)(adapter.Completion,error){if a==nil{return adapter.Completion{},errors.New("host.open adapter is nil")};if err:=r.Validate();err!=nil{return adapter.Completion{},err};if r.Target!="host"||r.Operation!="run"{return adapter.Completion{},adapter.NewBlockedError("host_contract_mismatch","host.open requires target=host and op=run")};p,err:=decodePayload(r.Payload);if err!=nil{return adapter.Completion{},adapter.NewBlockedError("invalid_host_open_payload",err.Error())};if p.Capability!=capability.HostOpenCapability{return adapter.Completion{},adapter.NewBlockedError("capability_mismatch","host payload capability must be host.open")};if !filepath.IsAbs(p.Path){return adapter.Completion{},adapter.NewBlockedError("path_not_absolute","host.open path must be absolute")};if _,err:=os.Stat(p.Path);err!=nil{return adapter.Completion{},adapter.NewBlockedError("path_unavailable",err.Error())};if err:=a.binding.VerifyExecutable();err!=nil{return adapter.Completion{},adapter.NewBlockedError("provider_integrity_failed",err.Error())};args:=[]string{p.Path};if r.IdempotencyKey!=""{if a.binding.IdempotencyContract==""{return adapter.Completion{},adapter.NewBlockedError("idempotency_unsupported","provider does not declare an idempotency contract")};args=append([]string{"--hq-idempotency-key",r.IdempotencyKey,"--"},args...)};cmd:=exec.CommandContext(ctx,a.binding.ExecutablePath,args...);cmd.Dir=r.CWD;var stdout,stderr bytes.Buffer;cmd.Stdout=&stdout;cmd.Stderr=&stderr;if err:=cmd.Run();err!=nil{m:=strings.TrimSpace(stderr.String());if m==""{m=err.Error()};return adapter.Completion{},&adapter.FailureError{Class:adapter.FailureFailed,Code:"provider_failed",Message:m}};return adapter.Completion{FinalText:fmt.Sprintf("host.open completed via %s",a.binding.ProviderID),FinalPath:p.Path},nil}
-type payload struct{Capability string `json:"capability"`;Path string `json:"path"`};func decodePayload(raw json.RawMessage)(payload,error){d:=json.NewDecoder(bytes.NewReader(raw));d.DisallowUnknownFields();var p payload;if err:=d.Decode(&p);err!=nil{return payload{},err};if strings.TrimSpace(p.Path)==""{return payload{},errors.New("path is required")};return p,nil}
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"hq/internal/capability"
+	"hq/internal/worker/adapter"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+)
+
+type Adapter struct{ binding capability.Binding }
+
+func New(b capability.Binding) (*Adapter, error) {
+	if err := b.Validate(b.DeploymentID); err != nil {
+		return nil, err
+	}
+	if err := b.VerifyExecutable(); err != nil {
+		return nil, err
+	}
+	return &Adapter{b}, nil
+}
+func (a *Adapter) Run(ctx context.Context, r adapter.Request, _ adapter.Emit) (adapter.Completion, error) {
+	if a == nil {
+		return adapter.Completion{}, errors.New("host.open adapter is nil")
+	}
+	if err := r.Validate(); err != nil {
+		return adapter.Completion{}, err
+	}
+	if r.Target != "host" || r.Operation != "run" {
+		return adapter.Completion{}, adapter.NewBlockedError("host_contract_mismatch", "host.open requires target=host and op=run")
+	}
+	p, err := decodePayload(r.Payload)
+	if err != nil {
+		return adapter.Completion{}, adapter.NewBlockedError("invalid_host_open_payload", err.Error())
+	}
+	if p.Capability != capability.HostOpenCapability {
+		return adapter.Completion{}, adapter.NewBlockedError("capability_mismatch", "host payload capability must be host.open")
+	}
+	if !filepath.IsAbs(p.Path) {
+		return adapter.Completion{}, adapter.NewBlockedError("path_not_absolute", "host.open path must be absolute")
+	}
+	if _, err := os.Stat(p.Path); err != nil {
+		return adapter.Completion{}, adapter.NewBlockedError("path_unavailable", err.Error())
+	}
+	if err := a.binding.VerifyExecutable(); err != nil {
+		return adapter.Completion{}, adapter.NewBlockedError("provider_integrity_failed", err.Error())
+	}
+	args := []string{p.Path}
+	if r.IdempotencyKey != "" {
+		if a.binding.IdempotencyContract == "" {
+			return adapter.Completion{}, adapter.NewBlockedError("idempotency_unsupported", "provider does not declare an idempotency contract")
+		}
+		args = append([]string{"--hq-idempotency-key", r.IdempotencyKey, "--"}, args...)
+	}
+	cmd := exec.CommandContext(ctx, a.binding.ExecutablePath, args...)
+	cmd.Dir = r.CWD
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		m := strings.TrimSpace(stderr.String())
+		if m == "" {
+			m = err.Error()
+		}
+		return adapter.Completion{}, &adapter.FailureError{Class: adapter.FailureFailed, Code: "provider_failed", Message: m}
+	}
+	return adapter.Completion{FinalText: fmt.Sprintf("host.open completed via %s", a.binding.ProviderID), FinalPath: p.Path}, nil
+}
+
+type payload struct {
+	Capability string `json:"capability"`
+	Path       string `json:"path"`
+}
+
+func decodePayload(raw json.RawMessage) (payload, error) {
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.DisallowUnknownFields()
+	var p payload
+	if err := d.Decode(&p); err != nil {
+		return payload{}, err
+	}
+	if strings.TrimSpace(p.Path) == "" {
+		return payload{}, errors.New("path is required")
+	}
+	return p, nil
+}

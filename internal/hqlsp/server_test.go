@@ -21,14 +21,14 @@ func TestCompletionAndStaleSubmitAppendNothingThenRepeatedExplicitSubmitsAreDist
 	uri := "file:///proof.json"
 	text := `{"id":"source-id","version":"instruction.v1","op":"run","target":"sh","payload":{"argv":["printf","hello"],"cwd":"."},"created_at":"2026-07-10T07:00:00Z"}`
 	server := &Server{
-		profile: hqprofile.Profile{Name: "local", DeploymentID: "dep-1", AcceptedPath: queue},
-		world: hq.DefaultWorld(),
+		profile:   hqprofile.Profile{Name: "local", DeploymentID: "dep-1", AcceptedPath: queue},
+		world:     hq.DefaultWorld(),
 		documents: map[string]document{uri: {Text: text, Version: 1}},
 	}
 	var output bytes.Buffer
 	completion := message{JSONRPC: "2.0", ID: json.RawMessage(`1`), Params: mustJSON(map[string]any{
 		"textDocument": map[string]any{"uri": uri},
-		"position": map[string]any{"line": 0, "character": len(text)},
+		"position":     map[string]any{"line": 0, "character": len(text)},
 	})}
 	if err := server.complete(&output, completion); err != nil {
 		t.Fatal(err)
@@ -36,7 +36,7 @@ func TestCompletionAndStaleSubmitAppendNothingThenRepeatedExplicitSubmitsAreDist
 	assertQueueLines(t, queue, 0)
 
 	stale := message{JSONRPC: "2.0", ID: json.RawMessage(`2`), Params: mustJSON(map[string]any{
-		"command": "hq.submit",
+		"command":   "hq.submit",
 		"arguments": []any{map[string]any{"uri": uri, "version": 2}},
 	})}
 	if err := server.executeCommand(&output, stale); err != nil {
@@ -45,7 +45,7 @@ func TestCompletionAndStaleSubmitAppendNothingThenRepeatedExplicitSubmitsAreDist
 	assertQueueLines(t, queue, 0)
 
 	valid := message{JSONRPC: "2.0", ID: json.RawMessage(`3`), Params: mustJSON(map[string]any{
-		"command": "hq.submit",
+		"command":   "hq.submit",
 		"arguments": []any{map[string]any{"uri": uri, "version": 1}},
 	})}
 	if err := server.executeCommand(&output, valid); err != nil {

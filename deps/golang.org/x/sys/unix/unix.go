@@ -23,8 +23,8 @@ type PollFd struct {
 }
 
 const (
-	TCGETS    = syscall.TCGETS
-	TCSETS    = syscall.TCSETS
+	TCGETS     = syscall.TCGETS
+	TCSETS     = syscall.TCSETS
 	TIOCGWINSZ = syscall.TIOCGWINSZ
 
 	IGNBRK = syscall.IGNBRK
@@ -93,8 +93,8 @@ func Poll(fds []PollFd, timeout int) (int, error) {
 	return int(r0), nil
 }
 
-func Pipe(p []int) error                       { return syscall.Pipe(p) }
+func Pipe(p []int) error                         { return syscall.Pipe(p) }
 func SetNonblock(fd int, nonblocking bool) error { return syscall.SetNonblock(fd, nonblocking) }
-func Close(fd int) error                       { return syscall.Close(fd) }
-func Write(fd int, p []byte) (int, error)      { return syscall.Write(fd, p) }
-func Read(fd int, p []byte) (int, error)       { return syscall.Read(fd, p) }
+func Close(fd int) error                         { return syscall.Close(fd) }
+func Write(fd int, p []byte) (int, error)        { return syscall.Write(fd, p) }
+func Read(fd int, p []byte) (int, error)         { return syscall.Read(fd, p) }

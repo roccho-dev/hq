@@ -1,3 +1,28 @@
 package worker
-import("fmt";"strings")
-func ApprovalsForAccepted(rows []ReadRow,approvedBy string)(ApprovalStore,error){if strings.TrimSpace(approvedBy)==""{return ApprovalStore{},fmt.Errorf("approved_by is required")};store:=EmptyApprovalStore();validation:=DefaultContract().ValidateRows(rows);for i,row:=range rows{if len(validation[i])!=0{continue};digest,err:=InstructionDigest(row.Instruction);if err!=nil{return ApprovalStore{},err};if _,ok:=store.byInstruction[row.Instruction.ID];ok{return ApprovalStore{},fmt.Errorf("duplicate accepted instruction id %q",row.Instruction.ID)};store.byInstruction[row.Instruction.ID]=ApprovalRecord{Version:ApprovalVersionV1,InstructionID:row.Instruction.ID,Approved:true,ApprovedBy:approvedBy,InstructionDigest:digest}};return store,nil}
+
+import (
+	"fmt"
+	"strings"
+)
+
+func ApprovalsForAccepted(rows []ReadRow, approvedBy string) (ApprovalStore, error) {
+	if strings.TrimSpace(approvedBy) == "" {
+		return ApprovalStore{}, fmt.Errorf("approved_by is required")
+	}
+	store := EmptyApprovalStore()
+	validation := DefaultContract().ValidateRows(rows)
+	for i, row := range rows {
+		if len(validation[i]) != 0 {
+			continue
+		}
+		digest, err := InstructionDigest(row.Instruction)
+		if err != nil {
+			return ApprovalStore{}, err
+		}
+		if _, ok := store.byInstruction[row.Instruction.ID]; ok {
+			return ApprovalStore{}, fmt.Errorf("duplicate accepted instruction id %q", row.Instruction.ID)
+		}
+		store.byInstruction[row.Instruction.ID] = ApprovalRecord{Version: ApprovalVersionV1, InstructionID: row.Instruction.ID, Approved: true, ApprovedBy: approvedBy, InstructionDigest: digest}
+	}
+	return store, nil
+}

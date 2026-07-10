@@ -43,17 +43,17 @@ func TestServeAutomaticallyProcessesAcceptedHostIntentWithExactProvider(t *testi
 	digest := sha256.Sum256(providerBytes)
 	capabilitiesPath := filepath.Join(root, "capabilities.json")
 	registry := capability.Registry{
-		Kind: capability.RegistryKind,
+		Kind:         capability.RegistryKind,
 		DeploymentID: "dep-test",
 		Bindings: []capability.Binding{{
-			Kind: capability.BindingKind,
-			CapabilityID: capability.HostOpenCapability,
-			ProviderID: "test-host-provider",
-			ContractVersion: capability.HostOpenContract,
-			DeploymentID: "dep-test",
-			ProviderKind: "executable",
-			ExecutablePath: executable,
-			IntegrityDigest: "sha256:" + hex.EncodeToString(digest[:]),
+			Kind:               capability.BindingKind,
+			CapabilityID:       capability.HostOpenCapability,
+			ProviderID:         "test-host-provider",
+			ContractVersion:    capability.HostOpenContract,
+			DeploymentID:       "dep-test",
+			ProviderKind:       "executable",
+			ExecutablePath:     executable,
+			IntegrityDigest:    "sha256:" + hex.EncodeToString(digest[:]),
 			VerificationStatus: "verified",
 		}},
 	}
@@ -67,14 +67,14 @@ func TestServeAutomaticallyProcessesAcceptedHostIntentWithExactProvider(t *testi
 	}
 	acceptedPath := filepath.Join(root, "accepted.jsonl")
 	accepted := map[string]any{
-		"kind": "accepted.instruction",
+		"kind":  "accepted.instruction",
 		"queue": "instruction.jsonl",
 		"instruction": map[string]any{
-			"id": "ins-host-test-001",
-			"version": "instruction.v1",
-			"op": "run",
-			"target": "host",
-			"payload": map[string]any{"capability": "host.open", "path": targetPath},
+			"id":         "ins-host-test-001",
+			"version":    "instruction.v1",
+			"op":         "run",
+			"target":     "host",
+			"payload":    map[string]any{"capability": "host.open", "path": targetPath},
 			"created_at": "2026-07-10T07:00:00Z",
 		},
 	}

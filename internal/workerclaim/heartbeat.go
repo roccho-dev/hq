@@ -16,14 +16,14 @@ const HeartbeatKind = "worker.heartbeat.v1"
 const heartbeatName = "heartbeat.json"
 
 type Heartbeat struct {
-	Kind string `json:"kind"`
-	ClaimID string `json:"claim_id"`
-	WorkerID string `json:"worker_id"`
-	Workspace string `json:"workspace"`
-	DeploymentID string `json:"deployment_id"`
-	Profile string `json:"profile"`
-	State string `json:"state"`
-	ObservedAt time.Time `json:"observed_at"`
+	Kind         string    `json:"kind"`
+	ClaimID      string    `json:"claim_id"`
+	WorkerID     string    `json:"worker_id"`
+	Workspace    string    `json:"workspace"`
+	DeploymentID string    `json:"deployment_id"`
+	Profile      string    `json:"profile"`
+	State        string    `json:"state"`
+	ObservedAt   time.Time `json:"observed_at"`
 }
 
 func (c *Claim) WriteHeartbeat(deploymentID, profile, state string, now time.Time) (Heartbeat, error) {

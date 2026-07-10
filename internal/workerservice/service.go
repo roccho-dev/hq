@@ -23,36 +23,36 @@ const LifecycleKind = "hq.workerLifecycle.v1"
 const HealthKind = "hq.workerHealth.v1"
 
 const (
-	StateReady = "configured_ready"
-	StateNotConfigured = "not_configured"
-	StateSourceUnavailable = "source_unavailable"
-	StateEvidenceInvalid = "evidence_invalid"
+	StateReady               = "configured_ready"
+	StateNotConfigured       = "not_configured"
+	StateSourceUnavailable   = "source_unavailable"
+	StateEvidenceInvalid     = "evidence_invalid"
 	StateProviderUnavailable = "provider_unavailable"
-	StateStale = "worker_stale_unhealthy"
-	StateReconciliation = "reconciliation_required"
+	StateStale               = "worker_stale_unhealthy"
+	StateReconciliation      = "reconciliation_required"
 )
 
 type Lifecycle struct {
-	Kind string `json:"kind"`
-	State string `json:"state"`
-	Profile string `json:"profile"`
-	DeploymentID string `json:"deployment_id"`
-	WorkerID string `json:"worker_id"`
-	ClaimID string `json:"claim_id,omitempty"`
-	ObservedAt time.Time `json:"observed_at"`
-	Message string `json:"message,omitempty"`
+	Kind         string    `json:"kind"`
+	State        string    `json:"state"`
+	Profile      string    `json:"profile"`
+	DeploymentID string    `json:"deployment_id"`
+	WorkerID     string    `json:"worker_id"`
+	ClaimID      string    `json:"claim_id,omitempty"`
+	ObservedAt   time.Time `json:"observed_at"`
+	Message      string    `json:"message,omitempty"`
 }
 
 type Health struct {
-	Kind string `json:"kind"`
-	State string `json:"state"`
-	Ready bool `json:"ready"`
-	Profile string `json:"profile"`
-	DeploymentID string `json:"deployment_id,omitempty"`
-	WorkerID string `json:"worker_id,omitempty"`
-	ClaimID string `json:"claim_id,omitempty"`
-	ObservedAt time.Time `json:"observed_at"`
-	Message string `json:"message,omitempty"`
+	Kind         string    `json:"kind"`
+	State        string    `json:"state"`
+	Ready        bool      `json:"ready"`
+	Profile      string    `json:"profile"`
+	DeploymentID string    `json:"deployment_id,omitempty"`
+	WorkerID     string    `json:"worker_id,omitempty"`
+	ClaimID      string    `json:"claim_id,omitempty"`
+	ObservedAt   time.Time `json:"observed_at"`
+	Message      string    `json:"message,omitempty"`
 }
 
 func Serve(ctx context.Context, profile hqprofile.Profile, workerID string, out io.Writer) error {

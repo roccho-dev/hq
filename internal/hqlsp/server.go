@@ -69,9 +69,9 @@ func (s *Server) handle(w io.Writer, msg message) error {
 	case "initialize":
 		return writeMessage(w, message{JSONRPC: "2.0", ID: msg.ID, Result: map[string]any{
 			"capabilities": map[string]any{
-				"textDocumentSync": 1,
-				"completionProvider": map[string]any{"triggerCharacters": []string{"{", "\"", ":", ","}},
-				"codeActionProvider": true,
+				"textDocumentSync":       1,
+				"completionProvider":     map[string]any{"triggerCharacters": []string{"{", "\"", ":", ","}},
+				"codeActionProvider":     true,
 				"executeCommandProvider": map[string]any{"commands": []string{"hq.submit"}},
 			},
 			"serverInfo": map[string]any{"name": "hq", "version": "1"},
@@ -150,12 +150,12 @@ func (s *Server) complete(w io.Writer, msg message) error {
 	items := make([]map[string]any, 0, len(suggestions))
 	for _, suggestion := range suggestions {
 		items = append(items, map[string]any{
-			"label": suggestion.Label,
-			"detail": suggestion.Detail,
-			"kind": 14,
-			"insertText": suggestion.InsertText,
+			"label":            suggestion.Label,
+			"detail":           suggestion.Detail,
+			"kind":             14,
+			"insertText":       suggestion.InsertText,
 			"insertTextFormat": 1,
-			"data": map[string]any{"compileDraft": suggestion.Draft, "deploymentId": s.profile.DeploymentID},
+			"data":             map[string]any{"compileDraft": suggestion.Draft, "deploymentId": s.profile.DeploymentID},
 		})
 	}
 	return writeMessage(w, message{JSONRPC: "2.0", ID: msg.ID, Result: map[string]any{"isIncomplete": false, "items": items}})
@@ -172,10 +172,10 @@ func (s *Server) codeAction(w io.Writer, msg message) error {
 	}
 	actions := []map[string]any{{
 		"title": "HQ Submit",
-		"kind": "quickfix",
+		"kind":  "quickfix",
 		"command": map[string]any{
-			"title": "HQ Submit",
-			"command": "hq.submit",
+			"title":     "HQ Submit",
+			"command":   "hq.submit",
 			"arguments": []any{map[string]any{"uri": uri, "version": doc.Version}},
 		},
 	}}
@@ -209,10 +209,10 @@ func (s *Server) executeCommand(w io.Writer, msg message) error {
 		return writeError(w, msg.ID, -32603, err.Error())
 	}
 	result := map[string]any{
-		"kind": SubmitResultKind,
-		"status": "queued",
-		"queueKind": draft.Kind,
-		"queueId": acceptedID,
+		"kind":         SubmitResultKind,
+		"status":       "queued",
+		"queueKind":    draft.Kind,
+		"queueId":      acceptedID,
 		"deploymentId": s.profile.DeploymentID,
 	}
 	return writeMessage(w, message{JSONRPC: "2.0", ID: msg.ID, Result: result})
@@ -261,12 +261,12 @@ func (s *Server) publishDiagnostics(w io.Writer, uri string) error {
 		diagnostics = append(diagnostics, map[string]any{
 			"range": map[string]any{
 				"start": map[string]int{"line": 0, "character": 0},
-				"end": map[string]int{"line": 0, "character": utf8.RuneCountInString(doc.Text)},
+				"end":   map[string]int{"line": 0, "character": utf8.RuneCountInString(doc.Text)},
 			},
 			"severity": 1,
-			"source": "hq",
-			"code": "invalid-json",
-			"message": "buffer is not one complete JSON object",
+			"source":   "hq",
+			"code":     "invalid-json",
+			"message":  "buffer is not one complete JSON object",
 		})
 	}
 	return writeMessage(w, message{JSONRPC: "2.0", Method: "textDocument/publishDiagnostics", Params: mustJSON(map[string]any{"uri": uri, "version": doc.Version, "diagnostics": diagnostics})})

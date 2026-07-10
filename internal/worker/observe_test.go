@@ -52,7 +52,7 @@ func TestBuildRunDetailExplainsOneRunWithoutInstructionText(t *testing.T) {
 	reason := "SECRET-REASON"
 	instruction := Instruction{
 		ID: "ins-1", Version: InstructionVersionV1, Op: "run", Target: "claude",
-		Payload: []byte(`{"prompt":"SECRET-PROMPT","cwd":"."}`),
+		Payload:   []byte(`{"prompt":"SECRET-PROMPT","cwd":"."}`),
 		CreatedAt: at.Format(time.RFC3339), Reason: &reason, Labels: []string{"SECRET-LABEL"},
 	}
 	results := []ResultRow{
