@@ -1,0 +1,3 @@
+{"type":"system","subtype":"init","session_id":"session-1"}
+{"type":"assistant","session_id":"session-1","message":{"content":[{"type":"text","text":"continued"}]}}
+{"type":"result","subtype":"success","is_error":false,"result":"continued","session_id":"session-1"}
