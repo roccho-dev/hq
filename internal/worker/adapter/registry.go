@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 )
 
 const RegistryVersion = "adapter.registry.v1"
@@ -20,7 +21,36 @@ type Registry struct {
 	targets  []string
 }
 
+var runtimeDefaults struct {
+	sync.RWMutex
+	factory func() []Registration
+}
+
+// InstallRuntimeDefaults lets one executable compose its concrete adapters
+// without moving provider meaning into worker core. Packages that do not install
+// a factory keep the original empty-registry behavior.
+func InstallRuntimeDefaults(factory func() []Registration) error {
+	if factory == nil {
+		return errors.New("runtime adapter factory is nil")
+	}
+	runtimeDefaults.Lock()
+	defer runtimeDefaults.Unlock()
+	if runtimeDefaults.factory != nil {
+		return errors.New("runtime adapter defaults are already installed")
+	}
+	runtimeDefaults.factory = factory
+	return nil
+}
+
 func NewRegistry(registrations ...Registration) (*Registry, error) {
+	if len(registrations) == 0 {
+		runtimeDefaults.RLock()
+		factory := runtimeDefaults.factory
+		runtimeDefaults.RUnlock()
+		if factory != nil {
+			registrations = factory()
+		}
+	}
 	adapters := make(map[string]Adapter, len(registrations))
 	for _, registration := range registrations {
 		if !IsCanonicalTarget(registration.Target) {
