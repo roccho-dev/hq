@@ -10,6 +10,11 @@ import (
 	"hq/internal/hqprofile"
 )
 
+func init() {
+	matched, code := runSubcommand(os.Args[1:], os.Stdin, os.Stdout, os.Stderr)
+	if matched { os.Exit(code) }
+}
+
 func runSubcommand(args []string, stdin io.Reader, stdout, stderr io.Writer) (bool, int) {
 	if len(args) == 0 || args[0] != "lsp" { return false, 0 }
 	flags := flag.NewFlagSet("hq lsp", flag.ContinueOnError)
@@ -27,10 +32,4 @@ func runSubcommand(args []string, stdin io.Reader, stdout, stderr io.Writer) (bo
 	if err != nil { fmt.Fprintln(stderr, "error:", err); return true, 1 }
 	if err := server.Serve(stdin, stdout); err != nil { fmt.Fprintln(stderr, "error:", err); return true, 1 }
 	return true, 0
-}
-
-func maybeRunSubcommand() {
-	matched, code := runSubcommand(os.Args[1:], os.Stdin, os.Stdout, os.Stderr)
-	if !matched { return }
-	os.Exit(code)
 }
