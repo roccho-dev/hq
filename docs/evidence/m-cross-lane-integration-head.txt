@@ -1,4 +1,0 @@
-Review entrypoint: docs/architecture/worker-cross-lane-integration.md
-Issues: #100 #101 #102
-Parent: #99
-Required proof: Worker core proof / Linux and Windows
