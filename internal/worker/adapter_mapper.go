@@ -3,7 +3,6 @@ package worker
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
@@ -140,11 +139,4 @@ func mapAdapterError(source error) (string, *ResultError) {
 		message = "adapter failed without an error message"
 	}
 	return ResultFailed, &ResultError{Code: "adapter_error", Message: message, Retryable: &retryable}
-}
-
-func ensureNoAdapterEventVersion(value string) error {
-	if strings.Contains(value, "adapter.event.v1") {
-		return fmt.Errorf("parallel persisted adapter event contract is forbidden")
-	}
-	return nil
 }
