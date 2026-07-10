@@ -6,6 +6,9 @@ import (
 	"io"
 	"os/exec"
 	"path/filepath"
+	"strings"
+
+	"hq/internal/worker/adapter"
 )
 
 // DirectOSRunner executes an already-validated explicit path without a shell,
@@ -15,7 +18,13 @@ import (
 type DirectOSRunner struct{}
 
 func (DirectOSRunner) Run(ctx context.Context, command Command) (CommandResult, error) {
-	path := command.Path
+	path := strings.TrimSpace(command.Path)
+	if path == "" || (!filepath.IsAbs(path) && !strings.ContainsAny(path, `/\`)) {
+		return CommandResult{}, &adapter.FailureError{
+			Class: adapter.FailureBlocked, Code: "executable_path_required",
+			Message: "sh argv[0] must be an absolute or explicit relative path; PATH lookup is forbidden",
+		}
+	}
 	if !filepath.IsAbs(path) {
 		path = filepath.Clean(filepath.Join(command.Dir, path))
 	}
