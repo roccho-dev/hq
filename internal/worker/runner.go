@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"hq/internal/worker/adapter"
+	"hq/internal/worker/directexec"
 	"hq/internal/workersafety"
 )
 
@@ -22,8 +23,8 @@ type Runner struct {
 }
 
 func NewRunner(workspaceRoot string, registry *adapter.Registry, approvals ApprovalStore) Runner {
-	if registry == nil {
-		registry, _ = adapter.NewRegistry()
+	if registry == nil || len(registry.Snapshot().Targets) == 0 {
+		registry = defaultRuntimeRegistry()
 	}
 	if approvals.byInstruction == nil {
 		approvals = EmptyApprovalStore()
@@ -31,6 +32,14 @@ func NewRunner(workspaceRoot string, registry *adapter.Registry, approvals Appro
 	return Runner{
 		Engine: NewEngine(workspaceRoot), Registry: registry, Approvals: approvals, Now: time.Now,
 	}
+}
+
+func defaultRuntimeRegistry() *adapter.Registry {
+	registry, err := adapter.NewRegistry(directexec.Registration())
+	if err != nil {
+		panic("construct direct executable registry: " + err.Error())
+	}
+	return registry
 }
 
 // Process is the single executable worker sequence. Validation and both policy
@@ -49,8 +58,8 @@ func (r Runner) Process(ctx context.Context, rows []ReadRow, prior LogData, repl
 	if r.Engine.Contract.Version == "" {
 		r.Engine.Contract = DefaultContract()
 	}
-	if r.Registry == nil {
-		r.Registry, _ = adapter.NewRegistry()
+	if r.Registry == nil || len(r.Registry.Snapshot().Targets) == 0 {
+		r.Registry = defaultRuntimeRegistry()
 	}
 	if r.Approvals.byInstruction == nil {
 		r.Approvals = EmptyApprovalStore()
