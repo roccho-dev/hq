@@ -3,12 +3,10 @@ package main
 import (
 	"reflect"
 	"testing"
-
-	"hq/internal/worker/adapter"
 )
 
 func TestRuntimeRegistryContainsEveryCanonicalTarget(t *testing.T) {
-	registry, err := adapter.NewRegistry()
+	registry, err := newRuntimeRegistry()
 	if err != nil {
 		t.Fatal(err)
 	}
