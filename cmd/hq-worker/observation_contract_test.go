@@ -217,7 +217,7 @@ func writeTwoRunObservationFixture(t *testing.T) (input, events, newestRun strin
 	events = filepath.Join(root, "events.jsonl")
 	instructions := strings.Join([]string{
 		`{"id":"ins-old","version":"instruction.v1","op":"run","target":"sh","payload":{"argv":["printf","old"],"cwd":"."},"created_at":"2026-07-10T00:00:00Z"}`,
-		`{"id":"ins-new","version":"instruction.v1","op":"run","target":"claude","payload":{"prompt":"Inspect the newest run.","cwd":"."},"created_at":"2026-07-10T00:01:00Z"}`,
+		`{"id":"ins-new","version":"instruction.v1","op":"run","target":"claude","payload":{"action":"print","prompt":"Inspect the newest run.","cwd":".","output_format":"json"},"created_at":"2026-07-10T00:01:00Z"}`,
 	}, "\n") + "\n"
 	if err := os.WriteFile(input, []byte(instructions), 0o600); err != nil {
 		t.Fatal(err)

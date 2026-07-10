@@ -15,10 +15,7 @@ type Contract struct {
 }
 
 func DefaultContract() Contract {
-	return Contract{
-		Version: InstructionVersionV1,
-		Targets: map[string]struct{}{"sh": {}, "herdr": {}, "codex": {}, "claude": {}},
-	}
+	return Contract{Version: InstructionVersionV1, Targets: map[string]struct{}{"sh": {}, "herdr": {}, "codex": {}, "claude": {}}}
 }
 
 func (c Contract) Validate(row ReadRow) []Diagnostic {
@@ -95,33 +92,27 @@ func validatePayload(target string, raw json.RawMessage) []Diagnostic {
 	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) || json.Unmarshal(trimmed, &payload) != nil || payload == nil {
 		return []Diagnostic{invalid("invalid_payload", "payload", "payload must be a JSON object")}
 	}
-	allowed := map[string]struct{}{"cwd": {}}
-	required := "prompt"
-	if target == "sh" {
-		required = "argv"
-		allowed["argv"] = struct{}{}
-	} else {
-		allowed["prompt"] = struct{}{}
+	if target != "sh" {
+		switch target {
+		case "herdr", "codex", "claude":
+			return validateAgentPayload(target, payload)
+		default:
+			return nil
+		}
 	}
+	allowed := map[string]struct{}{"cwd": {}, "argv": {}}
 	for key := range payload {
 		if _, ok := allowed[key]; !ok {
 			return []Diagnostic{invalid("invalid_payload", "payload."+key, "unsupported target payload field")}
 		}
 	}
-	if target == "sh" {
-		var argv []string
-		if json.Unmarshal(payload[required], &argv) != nil || len(argv) == 0 {
-			return []Diagnostic{invalid("invalid_payload", "payload.argv", "argv must be a non-empty array of non-empty strings")}
-		}
-		for _, arg := range argv {
-			if strings.TrimSpace(arg) == "" {
-				return []Diagnostic{invalid("invalid_payload", "payload.argv", "argv must contain only non-empty strings")}
-			}
-		}
-	} else {
-		var prompt string
-		if json.Unmarshal(payload[required], &prompt) != nil || strings.TrimSpace(prompt) == "" {
-			return []Diagnostic{invalid("invalid_payload", "payload.prompt", "prompt must be a non-empty string")}
+	var argv []string
+	if json.Unmarshal(payload["argv"], &argv) != nil || len(argv) == 0 {
+		return []Diagnostic{invalid("invalid_payload", "payload.argv", "argv must be a non-empty array of non-empty strings")}
+	}
+	for _, arg := range argv {
+		if strings.TrimSpace(arg) == "" {
+			return []Diagnostic{invalid("invalid_payload", "payload.argv", "argv must contain only non-empty strings")}
 		}
 	}
 	if rawCWD, ok := payload["cwd"]; ok {
