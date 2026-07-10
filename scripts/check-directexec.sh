@@ -126,14 +126,6 @@ import json
 import sys
 from pathlib import Path
 
-plan, normal, duplicate, events, ledger, show, tail, sentinel, args_file, secret = map(Path, sys.argv[1:10]) + [sys.argv[10]] if False else (None,)*11
-PY
-
-python3 - "$plan" "$normal" "$duplicate" "$events" "$ledger" "$show" "$tail" "$sentinel" "$args_file" "$secret" <<'PY'
-import json
-import sys
-from pathlib import Path
-
 plan_path, normal_path, duplicate_path, events_path, ledger_path, show_path, tail_path, sentinel_path, args_path = map(Path, sys.argv[1:10])
 secret = sys.argv[10]
 plan = [json.loads(line) for line in plan_path.read_text().splitlines() if line]
@@ -160,7 +152,8 @@ assert secret not in normal_path.read_text() and secret not in events_path.read_
 assert sentinel_path.read_text() == "started\n", sentinel_path.read_text()
 assert args == [";", "|", ">", "*", "$HOME", "%PATH%", '"quoted"', "space value"], args
 assert len(ledger) == 1 and ledger[0]["status"] == "completed", ledger
-assert show["run"]["status"] == "completed" and show["run"]["final"]["text"] == "process exited successfully with status 0", show
+assert show["run"]["status"] == "completed", show
+assert show["final"]["text"] == "process exited successfully with status 0", show
 assert [row["kind"] for row in tail] == ["accepted", "started", "stdout", "stderr", "completed"], tail
 PY
 
