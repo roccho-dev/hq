@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"hq/internal/worker/adapter"
+	"hq/internal/workersafety"
 )
 
 type runnerFakeAdapter struct {
@@ -169,5 +170,36 @@ func TestEventLogDirectAppendCannotBypassRedaction(t *testing.T) {
 	}
 	if strings.Contains(string(content), strings.Repeat("x", 24)) {
 		t.Fatalf("direct append leaked secret: %s", content)
+	}
+}
+
+func TestRunnerComposesWorkspaceBoundsIntoFinalMayDispatch(t *testing.T) {
+	raw := `{"id":"ins-outside-001","version":"instruction.v1","op":"run","target":"sh","payload":{"argv":["true"],"cwd":"../outside"},"created_at":"2026-07-10T06:00:00Z"}`
+	rows, err := ReadInstructions("queue.jsonl", strings.NewReader(raw))
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows=%+v err=%v", rows, err)
+	}
+	fake := &runnerFakeAdapter{}
+	registry, err := adapter.NewRegistry(adapter.Registration{Target: "sh", Adapter: fake})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := NewRunner(t.TempDir(), registry, approvedRunnerFixture(t, rows[0].Instruction))
+	sink := &memoryAppender{}
+	emitted, unsuccessful, err := runner.Process(context.Background(), rows, LogData{}, false, sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fake.calls != 0 || unsuccessful != 1 {
+		t.Fatalf("calls=%d unsuccessful=%d", fake.calls, unsuccessful)
+	}
+	if len(emitted) != 3 || emitted[0].Policy == nil {
+		t.Fatalf("emitted=%+v", emitted)
+	}
+	if emitted[0].Policy.MayDispatch || emitted[0].Policy.Status != workersafety.PolicyBlocked || emitted[0].Policy.Reason != "cwd_outside_workspace" {
+		t.Fatalf("final policy was not composed: %+v", emitted[0].Policy)
+	}
+	if emitted[2].Result == nil || emitted[2].Result.Error.Code != "cwd_outside_workspace" {
+		t.Fatalf("result=%+v", emitted[2])
 	}
 }
