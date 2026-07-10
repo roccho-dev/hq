@@ -13,15 +13,166 @@ import (
 	"hq/internal/worker/adapter"
 )
 
-type step struct { check func(Command) error; out CommandResult; err error }
-type script struct { t *testing.T; steps []step; seen []Command }
-func (s *script) Run(_ context.Context, command Command)(CommandResult,error){s.t.Helper();s.seen=append(s.seen,command);if len(s.steps)==0{s.t.Fatalf("unexpected command: %+v",command)};current:=s.steps[0];s.steps=s.steps[1:];if current.check!=nil{if err:=current.check(command);err!=nil{s.t.Fatal(err)}};return current.out,current.err}
-func req(target string,payload any,cwd string)adapter.Request{raw,_:=json.Marshal(payload);return adapter.Request{RunID:"run-1",InstructionID:"ins-1",Target:target,Operation:"run",Payload:raw,CWD:cwd}}
-func fixture(t *testing.T,name string)[]byte{t.Helper();raw,err:=os.ReadFile(filepath.Join("..","..","..","spec","fixtures","agent-adapters",name));if err!=nil{t.Fatal(err)};return raw}
-func TestHerdrActions(t *testing.T){noFocus:=true;t.Run("start",func(t *testing.T){runner:=&script{t:t,steps:[]step{{check:func(command Command)error{want:=[]string{"agent","start","review","--cwd","/work","--split","right","--no-focus","--","claude","-p","review"};if command.Path!="herdr-test"||!reflect.DeepEqual(command.Args,want){return errors.New("unexpected Herdr start command")};return nil}}}};got,err:=(Herdr{Runner:runner,Path:"herdr-test"}).Run(context.Background(),req("herdr",HerdrPayload{Action:"start",Name:"review",NoFocus:&noFocus,CommandArgv:[]string{"claude","-p"},Prompt:"review"},"/work"),nil);if err!=nil||got.NativeSessionID==nil||*got.NativeSessionID!="review"{t.Fatalf("completion=%+v err=%v",got,err)}});t.Run("read-observe-attach",func(t *testing.T){runner:=&script{t:t,steps:[]step{{out:CommandResult{}},{out:CommandResult{Stdout:[]byte("answer\n")}}}};got,err:=(Herdr{Runner:runner}).Run(context.Background(),req("herdr",HerdrPayload{Action:"observe",Agent:"review",WaitStatus:"idle",TimeoutMS:1000},"."),nil);if err!=nil||got.FinalText!="answer"||!reflect.DeepEqual(runner.seen[0].Args,[]string{"agent","wait","review","--status","idle","--timeout","1000"}){t.Fatalf("completion=%+v seen=%+v err=%v",got,runner.seen,err)};attach:=&script{t:t};got,err=(Herdr{Runner:attach}).Run(context.Background(),req("herdr",HerdrPayload{Action:"attach",Agent:"review",Takeover:true},"."),nil);if err!=nil||!strings.Contains(got.FinalText,"--takeover")||len(attach.seen)!=0{t.Fatalf("completion=%+v seen=%+v err=%v",got,attach.seen,err)}})}
-func TestCodexExecResumeAndParser(t *testing.T){root:=t.TempDir();runner:=&script{t:t,steps:[]step{{check:func(command Command)error{path:=valueAfter(command.Args,"--output-last-message");if path==""||!hasPair(command.Args,"--sandbox","workspace-write"){return errors.New("missing Codex output/sandbox argument")};return os.WriteFile(path,[]byte("final answer\n"),0o644)},out:CommandResult{Stdout:fixture(t,"codex.events.jsonl")}}}};got,err:=(Codex{Runner:runner}).Run(context.Background(),req("codex",CodexPayload{Action:"exec",Prompt:"review",Sandbox:"workspace-write"},root),nil);if err!=nil||got.FinalText!="final answer"||got.NativeSessionID==nil||*got.NativeSessionID!="thread-7"||!strings.HasPrefix(got.FinalPath,root){t.Fatalf("completion=%+v err=%v",got,err)};resume:=&script{t:t,steps:[]step{{check:func(command Command)error{if !strings.Contains(strings.Join(command.Args,"\x00"),"resume\x00thread-1\x00continue"){return errors.New("resume target missing")};return os.WriteFile(valueAfter(command.Args,"--output-last-message"),[]byte("continued"),0o644)},out:CommandResult{Stdout:[]byte("{\"type\":\"thread.started\",\"thread_id\":\"thread-1\"}\n")}}}};got,err=(Codex{Runner:resume}).Run(context.Background(),req("codex",CodexPayload{Action:"resume",Prompt:"continue",SessionID:"thread-1"},root),nil);if err!=nil||got.FinalText!="continued"{t.Fatalf("completion=%+v err=%v",got,err)};_,err=parseCodexEvents([]byte("not-json\n"),"",nil);var failure *adapter.FailureError;if !errors.As(err,&failure)||failure.Code!="protocol_error"{t.Fatalf("error=%v",err)}}
-func TestClaudeActions(t *testing.T){printRunner:=&script{t:t,steps:[]step{{out:CommandResult{Stdout:fixture(t,"claude.result.json")}}}};got,err:=(Claude{Runner:printRunner}).Run(context.Background(),req("claude",ClaudePayload{Action:"print",Prompt:"review",MaxTurns:3},"."),nil);if err!=nil||got.FinalText!="answer"||got.NativeSessionID==nil||*got.NativeSessionID!="session-1"{t.Fatalf("completion=%+v err=%v",got,err)};stream:=&script{t:t,steps:[]step{{out:CommandResult{Stdout:fixture(t,"claude.stream.jsonl")}}}};got,err=(Claude{Runner:stream}).Run(context.Background(),req("claude",ClaudePayload{Action:"resume",Prompt:"continue",SessionID:"session-1",OutputFormat:"stream-json"},"."),nil);if err!=nil||got.FinalText!="continued"||!hasPair(stream.seen[0].Args,"--resume","session-1"){t.Fatalf("completion=%+v seen=%+v err=%v",got,stream.seen,err)};background:=&script{t:t,steps:[]step{{out:CommandResult{Stdout:[]byte("started\n")}}}};got,err=(Claude{Runner:background}).Run(context.Background(),req("claude",ClaudePayload{Action:"background",Prompt:"work",Name:"audit"},"."),nil);if err!=nil||got.NativeSessionID==nil||has(background.seen[0].Args,"-p")||!hasPair(background.seen[0].Args,"--session-id",*got.NativeSessionID){t.Fatalf("completion=%+v seen=%+v err=%v",got,background.seen,err)};logs:=&script{t:t,steps:[]step{{out:CommandResult{Stdout:[]byte("log text\n")}}}};got,err=(Claude{Runner:logs}).Run(context.Background(),req("claude",ClaudePayload{Action:"logs",SessionID:"session-1"},"."),nil);if err!=nil||got.FinalText!="log text"||!reflect.DeepEqual(logs.seen[0].Args,[]string{"logs","session-1"}){t.Fatalf("completion=%+v seen=%+v err=%v",got,logs.seen,err)};attach:=&script{t:t};got,err=(Claude{Runner:attach}).Run(context.Background(),req("claude",ClaudePayload{Action:"attach",SessionID:"session-1"},"."),nil);if err!=nil||!strings.Contains(got.FinalText,"claude attach session-1")||len(attach.seen)!=0{t.Fatalf("completion=%+v seen=%+v err=%v",got,attach.seen,err)}}
-func TestRegistryAndStrictPayload(t *testing.T){registry,err:=NewRegistry(Config{Runner:&script{t:t}});if err!=nil||!reflect.DeepEqual(registry.Snapshot().Targets,[]string{"claude","codex","herdr"}){t.Fatalf("registry=%+v err=%v",registry,err)};_,err=(Codex{Runner:&script{t:t}}).Run(context.Background(),req("codex",map[string]any{"action":"exec","prompt":"x","hidden":true},"."),nil);var failure *adapter.FailureError;if !errors.As(err,&failure)||failure.Code!="invalid_payload"{t.Fatalf("error=%v",err)}}
-func valueAfter(values []string,key string)string{for i:=0;i+1<len(values);i++{if values[i]==key{return values[i+1]}};return ""}
-func hasPair(values []string,key,value string)bool{return valueAfter(values,key)==value}
-func has(values []string,target string)bool{for _,value:=range values{if value==target{return true}};return false}
+type step struct {
+	check func(Command) error
+	out   CommandResult
+	err   error
+}
+
+type script struct {
+	t     *testing.T
+	steps []step
+	seen  []Command
+}
+
+func (s *script) Run(_ context.Context, command Command) (CommandResult, error) {
+	s.t.Helper()
+	s.seen = append(s.seen, command)
+	if len(s.steps) == 0 {
+		s.t.Fatalf("unexpected command: %+v", command)
+	}
+	current := s.steps[0]
+	s.steps = s.steps[1:]
+	if current.check != nil {
+		if err := current.check(command); err != nil {
+			s.t.Fatal(err)
+		}
+	}
+	return current.out, current.err
+}
+
+func req(target string, payload any, cwd string) adapter.Request {
+	raw, _ := json.Marshal(payload)
+	return adapter.Request{RunID: "run-1", InstructionID: "ins-1", Target: target, Operation: "run", Payload: raw, CWD: cwd}
+}
+
+func fixture(t *testing.T, name string) []byte {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "spec", "fixtures", "agent-adapters", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func TestHerdrActions(t *testing.T) {
+	noFocus := true
+	t.Run("start", func(t *testing.T) {
+		runner := &script{t: t, steps: []step{{check: func(command Command) error {
+			want := []string{"agent", "start", "review", "--cwd", "/work", "--split", "right", "--no-focus", "--", "claude", "-p", "review"}
+			if command.Path != "herdr-test" || !reflect.DeepEqual(command.Args, want) {
+				return errors.New("unexpected Herdr start command")
+			}
+			return nil
+		}}}}
+		got, err := (Herdr{Runner: runner, Path: "herdr-test"}).Run(context.Background(), req("herdr", HerdrPayload{Action: "start", Name: "review", NoFocus: &noFocus, CommandArgv: []string{"claude", "-p"}, Prompt: "review"}, "/work"), nil)
+		if err != nil || got.NativeSessionID == nil || *got.NativeSessionID != "review" {
+			t.Fatalf("completion=%+v err=%v", got, err)
+		}
+	})
+	t.Run("read-observe-attach", func(t *testing.T) {
+		runner := &script{t: t, steps: []step{
+			{out: CommandResult{}},
+			{out: CommandResult{Stdout: []byte("answer\n")}},
+		}}
+		got, err := (Herdr{Runner: runner}).Run(context.Background(), req("herdr", HerdrPayload{Action: "observe", Agent: "review", WaitStatus: "idle", TimeoutMS: 1000}, "."), nil)
+		if err != nil || got.FinalText != "answer" || !reflect.DeepEqual(runner.seen[0].Args, []string{"agent", "wait", "review", "--status", "idle", "--timeout", "1000"}) {
+			t.Fatalf("completion=%+v seen=%+v err=%v", got, runner.seen, err)
+		}
+		attachRunner := &script{t: t}
+		got, err = (Herdr{Runner: attachRunner}).Run(context.Background(), req("herdr", HerdrPayload{Action: "attach", Agent: "review", Takeover: true}, "."), nil)
+		if err != nil || !strings.Contains(got.FinalText, "--takeover") || len(attachRunner.seen) != 0 {
+			t.Fatalf("completion=%+v seen=%+v err=%v", got, attachRunner.seen, err)
+		}
+	})
+}
+
+func TestCodexExecResumeAndParser(t *testing.T) {
+	root := t.TempDir()
+	runner := &script{t: t, steps: []step{{check: func(command Command) error {
+		path := valueAfter(command.Args, "--output-last-message")
+		if path == "" || !hasPair(command.Args, "--sandbox", "workspace-write") {
+			return errors.New("missing Codex output/sandbox argument")
+		}
+		return os.WriteFile(path, []byte("final answer\n"), 0o644)
+	}, out: CommandResult{Stdout: fixture(t, "codex.events.jsonl")}}}}
+	got, err := (Codex{Runner: runner}).Run(context.Background(), req("codex", CodexPayload{Action: "exec", Prompt: "review", Sandbox: "workspace-write"}, root), nil)
+	if err != nil || got.FinalText != "final answer" || got.NativeSessionID == nil || *got.NativeSessionID != "thread-7" || !strings.HasPrefix(got.FinalPath, root) {
+		t.Fatalf("completion=%+v err=%v", got, err)
+	}
+	resume := &script{t: t, steps: []step{{check: func(command Command) error {
+		if !strings.Contains(strings.Join(command.Args, "\x00"), "resume\x00thread-1\x00continue") {
+			return errors.New("resume target missing")
+		}
+		return os.WriteFile(valueAfter(command.Args, "--output-last-message"), []byte("continued"), 0o644)
+	}, out: CommandResult{Stdout: []byte("{\"type\":\"thread.started\",\"thread_id\":\"thread-1\"}\n")}}}}
+	got, err = (Codex{Runner: resume}).Run(context.Background(), req("codex", CodexPayload{Action: "resume", Prompt: "continue", SessionID: "thread-1"}, root), nil)
+	if err != nil || got.FinalText != "continued" {
+		t.Fatalf("completion=%+v err=%v", got, err)
+	}
+	_, err = parseCodexEvents([]byte("not-json\n"), "", nil)
+	var failure *adapter.FailureError
+	if !errors.As(err, &failure) || failure.Code != "protocol_error" {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestClaudeActions(t *testing.T) {
+	printRunner := &script{t: t, steps: []step{{out: CommandResult{Stdout: fixture(t, "claude.result.json")}}}}
+	got, err := (Claude{Runner: printRunner}).Run(context.Background(), req("claude", ClaudePayload{Action: "print", Prompt: "review", MaxTurns: 3}, "."), nil)
+	if err != nil || got.FinalText != "answer" || got.NativeSessionID == nil || *got.NativeSessionID != "session-1" {
+		t.Fatalf("completion=%+v err=%v", got, err)
+	}
+	streamRunner := &script{t: t, steps: []step{{out: CommandResult{Stdout: fixture(t, "claude.stream.jsonl")}}}}
+	got, err = (Claude{Runner: streamRunner}).Run(context.Background(), req("claude", ClaudePayload{Action: "resume", Prompt: "continue", SessionID: "session-1", OutputFormat: "stream-json"}, "."), nil)
+	if err != nil || got.FinalText != "continued" || !hasPair(streamRunner.seen[0].Args, "--resume", "session-1") {
+		t.Fatalf("completion=%+v seen=%+v err=%v", got, streamRunner.seen, err)
+	}
+	background := &script{t: t, steps: []step{{out: CommandResult{Stdout: []byte("started\n")}}}}
+	got, err = (Claude{Runner: background}).Run(context.Background(), req("claude", ClaudePayload{Action: "background", Prompt: "work", Name: "audit"}, "."), nil)
+	if err != nil || got.NativeSessionID == nil || has(background.seen[0].Args, "-p") || !hasPair(background.seen[0].Args, "--session-id", *got.NativeSessionID) {
+		t.Fatalf("completion=%+v seen=%+v err=%v", got, background.seen, err)
+	}
+	logs := &script{t: t, steps: []step{{out: CommandResult{Stdout: []byte("log text\n")}}}}
+	got, err = (Claude{Runner: logs}).Run(context.Background(), req("claude", ClaudePayload{Action: "logs", SessionID: "session-1"}, "."), nil)
+	if err != nil || got.FinalText != "log text" || !reflect.DeepEqual(logs.seen[0].Args, []string{"logs", "session-1"}) {
+		t.Fatalf("completion=%+v seen=%+v err=%v", got, logs.seen, err)
+	}
+	attach := &script{t: t}
+	got, err = (Claude{Runner: attach}).Run(context.Background(), req("claude", ClaudePayload{Action: "attach", SessionID: "session-1"}, "."), nil)
+	if err != nil || !strings.Contains(got.FinalText, "claude attach session-1") || len(attach.seen) != 0 {
+		t.Fatalf("completion=%+v seen=%+v err=%v", got, attach.seen, err)
+	}
+}
+
+func TestRegistryAndStrictPayload(t *testing.T) {
+	registry, err := NewRegistry(Config{Runner: &script{t: t}})
+	if err != nil || !reflect.DeepEqual(registry.Snapshot().Targets, []string{"claude", "codex", "herdr"}) {
+		t.Fatalf("registry=%+v err=%v", registry, err)
+	}
+	_, err = (Codex{Runner: &script{t: t}}).Run(context.Background(), req("codex", map[string]any{"action": "exec", "prompt": "x", "hidden": true}, "."), nil)
+	var failure *adapter.FailureError
+	if !errors.As(err, &failure) || failure.Code != "invalid_payload" {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+func valueAfter(values []string, key string) string {
+	for i := 0; i+1 < len(values); i++ {
+		if values[i] == key {
+			return values[i+1]
+		}
+	}
+	return ""
+}
+
+func hasPair(values []string, key, value string) bool { return valueAfter(values, key) == value }
+
+func has(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
