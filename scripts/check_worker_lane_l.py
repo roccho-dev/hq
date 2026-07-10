@@ -18,13 +18,13 @@ from typing import Any, Iterable
 
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACT = ROOT / "artifacts" / "worker-lane-l"
-IS_WINDOWS = os.name == "nt"
-EXE = ".exe" if IS_WINDOWS else ""
+WINDOWS = os.name == "nt"
+EXE = ".exe" if WINDOWS else ""
 
 
-def write_text(path: Path, value: str) -> None:
+def write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(value, encoding="utf-8")
+    path.write_text(text, encoding="utf-8")
 
 
 def write_json(path: Path, value: Any) -> None:
@@ -70,31 +70,31 @@ def run(
     return completed
 
 
-def sha256_file(path: Path) -> str:
-    return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
-
-
 def executable(path: Path) -> str:
     return str(path.resolve())
 
 
+def digest(path: Path) -> str:
+    return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def build_binaries() -> dict[str, Path]:
-    binary_dir = ARTIFACT / "bin"
-    binary_dir.mkdir(parents=True, exist_ok=True)
+    output = ARTIFACT / "bin"
+    output.mkdir(parents=True, exist_ok=True)
     binaries = {
-        "hq": binary_dir / f"hq{EXE}",
-        "worker": binary_dir / f"hq-worker{EXE}",
-        "provider": binary_dir / f"hq-worker-proof-provider{EXE}",
+        "hq": output / f"hq{EXE}",
+        "worker": output / f"hq-worker{EXE}",
+        "provider": output / f"hq-worker-proof-provider{EXE}",
     }
     run(["go", "build", "-o", str(binaries["hq"]), "./cmd/hq"])
     run(["go", "build", "-o", str(binaries["worker"]), "./cmd/hq-worker"])
     run(["go", "build", "-o", str(binaries["provider"]), "./cmd/hq-worker-proof-provider"])
-    for provider in ("sh", "herdr", "codex", "claude"):
-        destination = binary_dir / f"proof-{provider}{EXE}"
-        shutil.copy2(binaries["provider"], destination)
-        if not IS_WINDOWS:
-            destination.chmod(0o755)
-        binaries[provider] = destination
+    for name in ("sh", "herdr", "codex", "claude"):
+        target = output / f"proof-{name}{EXE}"
+        shutil.copy2(binaries["provider"], target)
+        if not WINDOWS:
+            target.chmod(0o755)
+        binaries[name] = target
     return binaries
 
 
@@ -104,55 +104,67 @@ def contract_proof() -> None:
         stdout_path=ARTIFACT / "contract-fixture-test.stdout.log",
         stderr_path=ARTIFACT / "contract-fixture-test.stderr.log",
     )
-    fixture_paths = [
-        ROOT / "spec/fixtures/instruction.examples.jsonl",
-        ROOT / "spec/fixtures/instruction.invalid.jsonl",
-        ROOT / "spec/fixtures/result.runs.jsonl",
-        ROOT / "spec/fixtures/session.index.jsonl",
-        ROOT / "spec/fixtures/status.transitions.jsonl",
-        ROOT / "spec/fixtures/agent-adapters/instructions.jsonl",
+    fixtures = [
+        "spec/fixtures/instruction.examples.jsonl",
+        "spec/fixtures/instruction.invalid.jsonl",
+        "spec/fixtures/result.runs.jsonl",
+        "spec/fixtures/session.index.jsonl",
+        "spec/fixtures/status.transitions.jsonl",
+        "spec/fixtures/agent-adapters/instructions.jsonl",
     ]
-    matrix = []
-    for path in fixture_paths:
-        rows = read_jsonl(path)
-        matrix.append(
-            {
-                "path": str(path.relative_to(ROOT)).replace("\\", "/"),
-                "rows": len(rows),
-                "sha256": sha256_file(path),
-                "valid_or_negative": "negative" if "invalid" in path.name else "valid",
-            }
-        )
     write_json(
         ARTIFACT / "contract-fixture-matrix.json",
         {
             "version": "worker.contract-fixture-matrix.v1",
             "valid_fixtures_pass": True,
             "invalid_fixtures_fail_closed": True,
-            "fixtures": matrix,
+            "fixtures": [
+                {
+                    "path": name,
+                    "rows": len(read_jsonl(ROOT / name)),
+                    "sha256": digest(ROOT / name),
+                    "valid_or_negative": "negative" if "invalid" in name else "valid",
+                }
+                for name in fixtures
+            ],
         },
     )
 
 
-def source_instructions(binaries: dict[str, Path], marker: Path) -> list[dict[str, Any]]:
+def instruction(
+    identifier: str,
+    target: str,
+    payload: dict[str, Any],
+    minute: int,
+    **optional: Any,
+) -> dict[str, Any]:
+    row = {
+        "id": identifier,
+        "version": "instruction.v1",
+        "op": "run",
+        "target": target,
+        "payload": payload,
+        "created_at": f"2026-07-10T07:{minute:02d}:00Z",
+    }
+    row.update(optional)
+    return row
+
+
+def source_rows(binaries: dict[str, Path], marker: Path) -> list[dict[str, Any]]:
     literal = f"; touch {marker} && echo $(uname)"
-    rows = [
-        {
-            "id": "lane-l-sh-001",
-            "version": "instruction.v1",
-            "op": "run",
-            "target": "sh",
-            "payload": {"cwd": ".", "argv": [executable(binaries["sh"]), "echo", literal]},
-            "created_at": "2026-07-10T07:20:00Z",
-            "reason": "lane L direct argv and injection proof",
-            "labels": ["lane-l", "fixture-proof"],
-        },
-        {
-            "id": "lane-l-herdr-start-001",
-            "version": "instruction.v1",
-            "op": "run",
-            "target": "herdr",
-            "payload": {
+    return [
+        instruction(
+            "lane-l-sh-001",
+            "sh",
+            {"cwd": ".", "argv": [executable(binaries["sh"]), "echo", literal]},
+            20,
+            reason="lane L direct argv and injection proof",
+            labels=["lane-l", "fixture-proof"],
+        ),
+        instruction(
+            "lane-l-herdr-start-001",
+            "herdr",
+            {
                 "action": "start",
                 "cwd": ".",
                 "name": "lane-l-proof",
@@ -161,28 +173,24 @@ def source_instructions(binaries: dict[str, Path], marker: Path) -> list[dict[st
                 "command_argv": [executable(binaries["claude"]), "-p"],
                 "prompt": "Return deterministic proof.",
             },
-            "created_at": "2026-07-10T07:21:00Z",
-        },
-        {
-            "id": "lane-l-herdr-read-001",
-            "version": "instruction.v1",
-            "op": "run",
-            "target": "herdr",
-            "payload": {
+            21,
+        ),
+        instruction(
+            "lane-l-herdr-read-001",
+            "herdr",
+            {
                 "action": "read",
                 "cwd": ".",
                 "agent": "terminal-proof-1",
                 "source": "recent-unwrapped",
                 "lines": 100,
             },
-            "created_at": "2026-07-10T07:22:00Z",
-        },
-        {
-            "id": "lane-l-herdr-observe-001",
-            "version": "instruction.v1",
-            "op": "run",
-            "target": "herdr",
-            "payload": {
+            22,
+        ),
+        instruction(
+            "lane-l-herdr-observe-001",
+            "herdr",
+            {
                 "action": "observe",
                 "cwd": ".",
                 "agent": "terminal-proof-1",
@@ -190,27 +198,18 @@ def source_instructions(binaries: dict[str, Path], marker: Path) -> list[dict[st
                 "timeout_ms": 1000,
                 "lines": 100,
             },
-            "created_at": "2026-07-10T07:23:00Z",
-        },
-        {
-            "id": "lane-l-herdr-attach-001",
-            "version": "instruction.v1",
-            "op": "run",
-            "target": "herdr",
-            "payload": {
-                "action": "attach",
-                "cwd": ".",
-                "agent": "terminal-proof-1",
-                "takeover": False,
-            },
-            "created_at": "2026-07-10T07:24:00Z",
-        },
-        {
-            "id": "lane-l-codex-exec-001",
-            "version": "instruction.v1",
-            "op": "run",
-            "target": "codex",
-            "payload": {
+            23,
+        ),
+        instruction(
+            "lane-l-herdr-attach-001",
+            "herdr",
+            {"action": "attach", "cwd": ".", "agent": "terminal-proof-1", "takeover": False},
+            24,
+        ),
+        instruction(
+            "lane-l-codex-exec-001",
+            "codex",
+            {
                 "action": "exec",
                 "prompt": "Return Codex lane L proof.",
                 "cwd": ".",
@@ -218,14 +217,12 @@ def source_instructions(binaries: dict[str, Path], marker: Path) -> list[dict[st
                 "sandbox": "workspace-write",
                 "skip_git_repo_check": True,
             },
-            "created_at": "2026-07-10T07:25:00Z",
-        },
-        {
-            "id": "lane-l-codex-resume-001",
-            "version": "instruction.v1",
-            "op": "run",
-            "target": "codex",
-            "payload": {
+            25,
+        ),
+        instruction(
+            "lane-l-codex-resume-001",
+            "codex",
+            {
                 "action": "resume",
                 "prompt": "Continue Codex lane L proof.",
                 "session_id": "thread-proof-1",
@@ -234,29 +231,25 @@ def source_instructions(binaries: dict[str, Path], marker: Path) -> list[dict[st
                 "sandbox": "workspace-write",
                 "skip_git_repo_check": True,
             },
-            "created_at": "2026-07-10T07:26:00Z",
-            "reply_to": "lane-l-codex-exec-001",
-        },
-        {
-            "id": "lane-l-claude-print-001",
-            "version": "instruction.v1",
-            "op": "run",
-            "target": "claude",
-            "payload": {
+            26,
+            reply_to="lane-l-codex-exec-001",
+        ),
+        instruction(
+            "lane-l-claude-print-001",
+            "claude",
+            {
                 "action": "print",
                 "prompt": "Return Claude lane L proof.",
                 "cwd": ".",
                 "output_format": "json",
                 "max_turns": 1,
             },
-            "created_at": "2026-07-10T07:27:00Z",
-        },
-        {
-            "id": "lane-l-claude-resume-001",
-            "version": "instruction.v1",
-            "op": "run",
-            "target": "claude",
-            "payload": {
+            27,
+        ),
+        instruction(
+            "lane-l-claude-resume-001",
+            "claude",
+            {
                 "action": "resume",
                 "prompt": "Continue Claude lane L proof.",
                 "session_id": "session-proof-1",
@@ -264,26 +257,31 @@ def source_instructions(binaries: dict[str, Path], marker: Path) -> list[dict[st
                 "output_format": "stream-json",
                 "max_turns": 1,
             },
-            "created_at": "2026-07-10T07:28:00Z",
-            "reply_to": "lane-l-claude-print-001",
-        },
+            28,
+            reply_to="lane-l-claude-print-001",
+        ),
     ]
-    return rows
 
 
-def accept_instructions(hq: Path, rows: list[dict[str, Any]], queue: Path) -> None:
+def accept_all(hq: Path, rows: list[dict[str, Any]], queue: Path) -> None:
     outputs = []
     for row in rows:
-        completed = run(
-            [executable(hq), "--accept", json.dumps(row, ensure_ascii=False, separators=(",", ":")), "--queue", str(queue)]
+        result = run(
+            [
+                executable(hq),
+                "--accept",
+                json.dumps(row, ensure_ascii=False, separators=(",", ":")),
+                "--queue",
+                str(queue),
+            ]
         )
-        outputs.append(json.loads(completed.stdout))
+        outputs.append(json.loads(result.stdout))
     write_jsonl(ARTIFACT / "accepted-command-output.jsonl", outputs)
     shutil.copy2(queue, ARTIFACT / "accepted-instructions.jsonl")
 
 
-def make_approvals(plan_rows: list[dict[str, Any]], path: Path) -> None:
-    approvals = [
+def approvals(plan: list[dict[str, Any]], path: Path) -> None:
+    rows = [
         {
             "version": "worker.approval.v1",
             "instruction_id": row["instruction_id"],
@@ -291,16 +289,16 @@ def make_approvals(plan_rows: list[dict[str, Any]], path: Path) -> None:
             "approved_by": "lane-l-ci",
             "instruction_digest": row["instruction_digest"],
         }
-        for row in plan_rows
+        for row in plan
     ]
-    write_jsonl(path, approvals)
+    write_jsonl(path, rows)
     shutil.copy2(path, ARTIFACT / "approvals.jsonl")
 
 
-def project_sessions(ledger: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    sessions = []
+def session_projection(ledger: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    projected = []
     for row in ledger:
-        session = {
+        value = {
             "version": "session.v1",
             "run_id": row["run_id"],
             "instruction_id": row["instruction_id"],
@@ -310,71 +308,77 @@ def project_sessions(ledger: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "started_at": row["started_at"],
             "last_event_at": row["last_event_at"],
         }
-        if row.get("native_session_id"):
-            session["native_session_id"] = row["native_session_id"]
-        if row.get("final_path"):
-            session["final_path"] = row["final_path"]
-        sessions.append(session)
-    return sessions
+        for key in ("native_session_id", "final_path"):
+            if row.get(key):
+                value[key] = row[key]
+        projected.append(value)
+    return projected
 
 
-def run_whole_path(binaries: dict[str, Path]) -> None:
+def verify_invocations(rows: list[dict[str, Any]], marker: Path) -> None:
+    if len(rows) != 10:
+        raise AssertionError(f"unexpected provider process count: {len(rows)}")
+    if any(row.get("fixture_only") is not True or not row.get("argv") for row in rows):
+        raise AssertionError("provider invocation is not inspectable")
+
+    sh_rows = [row for row in rows if row["provider"] == "sh"]
+    if len(sh_rows) != 1 or sh_rows[0]["argv"] != ["echo", f"; touch {marker} && echo $(uname)"]:
+        raise AssertionError(f"sh argv drift: {sh_rows}")
+
+    for provider in ("codex", "claude"):
+        provider_rows = [row for row in rows if row["provider"] == provider]
+        if len(provider_rows) != 2 or any(row["stdin_bytes"] <= 0 for row in provider_rows):
+            raise AssertionError(f"{provider} stdin proof is missing")
+    if any(row["argv"][-1] != "-" for row in rows if row["provider"] == "codex"):
+        raise AssertionError("Codex did not use the stdin marker")
+    if any("-p" not in row["argv"] for row in rows if row["provider"] == "claude"):
+        raise AssertionError("Claude did not use print mode")
+
+
+def whole_path(binaries: dict[str, Path]) -> None:
     work = Path(tempfile.mkdtemp(prefix="hq-worker-lane-l-"))
     try:
         project = work / "project"
         project.mkdir(parents=True)
         marker = project / "injection-must-not-exist"
-        source_rows = source_instructions(binaries, marker)
-        write_jsonl(ARTIFACT / "source-instructions.jsonl", source_rows)
+        source = source_rows(binaries, marker)
+        write_jsonl(ARTIFACT / "source-instructions.jsonl", source)
 
-        accepted = work / "accepted.jsonl"
-        accept_instructions(binaries["hq"], source_rows, accepted)
-
-        provider_log = ARTIFACT / "provider-invocations.jsonl"
+        queue = work / "accepted.jsonl"
+        accept_all(binaries["hq"], source, queue)
         events = work / "events.jsonl"
-        plan_path = ARTIFACT / "dry-run-plan.jsonl"
+        provider_log = ARTIFACT / "provider-invocations.jsonl"
+
         dry = run(
             [
                 executable(binaries["worker"]),
-                "--input", str(accepted),
+                "--input", str(queue),
                 "--input-format", "accepted.instruction",
                 "--events", str(events),
                 "--workspace", str(project),
                 "--dry-run",
             ],
-            stdout_path=plan_path,
+            stdout_path=ARTIFACT / "dry-run-plan.jsonl",
             stderr_path=ARTIFACT / "dry-run.stderr.log",
         )
-        if dry.returncode != 0 or events.exists() or provider_log.exists() or marker.exists():
+        plan = [json.loads(line) for line in dry.stdout.splitlines() if line.strip()]
+        if len(plan) != len(source) or any(row["decision"] != "accepted" for row in plan):
+            raise AssertionError("accepted dry-run plan is incomplete")
+        if events.exists() or provider_log.exists() or marker.exists():
             raise AssertionError("dry-run caused a side effect")
-        plan_rows = read_jsonl(plan_path)
-        if len(plan_rows) != len(source_rows) or any(row["decision"] != "accepted" for row in plan_rows):
-            raise AssertionError(f"unexpected accepted dry-run plan: {plan_rows}")
 
-        invalid_input = work / "invalid-instructions.jsonl"
-        invalid_rows = [
-            {
-                "id": "lane-l-invalid-target",
-                "version": "instruction.v1",
-                "op": "run",
-                "target": "unknown",
-                "payload": {},
-                "created_at": "2026-07-10T07:29:00Z",
-            },
-            {
-                "id": "lane-l-invalid-argv",
-                "version": "instruction.v1",
-                "op": "run",
-                "target": "sh",
-                "payload": {"argv": []},
-                "created_at": "2026-07-10T07:30:00Z",
-            },
-        ]
-        write_jsonl(invalid_input, invalid_rows)
+        invalid_path = work / "invalid.jsonl"
+        write_jsonl(
+            invalid_path,
+            [
+                instruction("lane-l-invalid-target", "unknown", {}, 29),
+                instruction("lane-l-invalid-argv", "sh", {"argv": []}, 30),
+            ],
+        )
         invalid = run(
             [
                 executable(binaries["worker"]),
-                "--input", str(invalid_input),
+                "--input", str(invalid_path),
                 "--input-format", "instruction.v1",
                 "--events", str(events),
                 "--workspace", str(project),
@@ -384,14 +388,16 @@ def run_whole_path(binaries: dict[str, Path]) -> None:
             stdout_path=ARTIFACT / "dry-run-invalid-plan.jsonl",
             stderr_path=ARTIFACT / "dry-run-invalid.stderr.log",
         )
-        invalid_plans = [json.loads(line) for line in invalid.stdout.splitlines() if line.strip()]
-        if len(invalid_plans) != 2 or any(row["decision"] != "blocked" or not row["validation"] for row in invalid_plans):
-            raise AssertionError(f"invalid dry-run did not fail closed: {invalid_plans}")
+        invalid_plan = [json.loads(line) for line in invalid.stdout.splitlines() if line.strip()]
+        if len(invalid_plan) != 2 or any(
+            row["decision"] != "blocked" or not row.get("validation_errors") for row in invalid_plan
+        ):
+            raise AssertionError(f"invalid dry-run did not fail closed: {invalid_plan}")
         if events.exists() or provider_log.exists() or marker.exists():
             raise AssertionError("invalid dry-run caused a side effect")
 
-        approvals = work / "approvals.jsonl"
-        make_approvals(plan_rows, approvals)
+        approval_path = work / "approvals.jsonl"
+        approvals(plan, approval_path)
         environment = os.environ.copy()
         environment.update(
             {
@@ -404,10 +410,10 @@ def run_whole_path(binaries: dict[str, Path]) -> None:
         run(
             [
                 executable(binaries["worker"]),
-                "--input", str(accepted),
+                "--input", str(queue),
                 "--input-format", "accepted.instruction",
                 "--events", str(events),
-                "--approvals", str(approvals),
+                "--approvals", str(approval_path),
                 "--workspace", str(project),
             ],
             env=environment,
@@ -418,33 +424,27 @@ def run_whole_path(binaries: dict[str, Path]) -> None:
             raise AssertionError("metacharacter argv was reparsed by a shell")
 
         event_rows = read_jsonl(events)
-        result_rows = [row for row in event_rows if row.get("version") == "result.v1"]
+        results = [row for row in event_rows if row.get("version") == "result.v1"]
         grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
-        for row in result_rows:
+        for row in results:
             grouped[row["instruction_id"]].append(row)
-        if set(grouped) != {row["id"] for row in source_rows}:
-            raise AssertionError("not every accepted instruction has durable result evidence")
-        for instruction_id, rows in grouped.items():
+        if set(grouped) != {row["id"] for row in source}:
+            raise AssertionError("not every accepted instruction has result evidence")
+        for identifier, rows in grouped.items():
             rows.sort(key=lambda row: row["seq"])
-            if rows[-1]["kind"] != "completed":
-                raise AssertionError(f"{instruction_id} did not complete: {rows[-1]}")
-            if "final" not in rows[-1]:
-                raise AssertionError(f"{instruction_id} has no durable final result")
+            if rows[-1]["kind"] != "completed" or not rows[-1].get("final"):
+                raise AssertionError(f"{identifier} lacks durable completion: {rows[-1]}")
 
-        invocations_before = read_jsonl(provider_log)
-        if len(invocations_before) != 10:
-            raise AssertionError(f"unexpected provider process count: {len(invocations_before)}")
-        for invocation in invocations_before:
-            if invocation.get("fixture_only") is not True or not invocation.get("argv"):
-                raise AssertionError(f"uninspectable provider invocation: {invocation}")
-
+        invocations = read_jsonl(provider_log)
+        verify_invocations(invocations, marker)
+        before_duplicate = len(invocations)
         duplicate = run(
             [
                 executable(binaries["worker"]),
-                "--input", str(accepted),
+                "--input", str(queue),
                 "--input-format", "accepted.instruction",
                 "--events", str(events),
-                "--approvals", str(approvals),
+                "--approvals", str(approval_path),
                 "--workspace", str(project),
             ],
             expected=(2,),
@@ -453,61 +453,58 @@ def run_whole_path(binaries: dict[str, Path]) -> None:
             stderr_path=ARTIFACT / "duplicate-read.stderr.log",
         )
         duplicate_rows = [json.loads(line) for line in duplicate.stdout.splitlines() if line.strip()]
-        if len(duplicate_rows) != len(source_rows) or any(
+        if len(duplicate_rows) != len(source) or any(
             row.get("version") != "validation.v1" or row.get("error", {}).get("code") != "duplicate_id"
             for row in duplicate_rows
         ):
-            raise AssertionError(f"duplicate re-read was not rejected: {duplicate_rows}")
-        if len(read_jsonl(provider_log)) != len(invocations_before):
-            raise AssertionError("duplicate re-read executed a provider")
+            raise AssertionError("duplicate reread did not fail closed")
+        if len(read_jsonl(provider_log)) != before_duplicate:
+            raise AssertionError("duplicate reread executed a provider")
 
         shutil.copy2(events, ARTIFACT / "events.jsonl")
-        ledger_path = ARTIFACT / "ledger.jsonl"
-        run(
+        ledger_result = run(
             [
                 executable(binaries["worker"]), "list",
-                "--input", str(accepted),
+                "--input", str(queue),
                 "--input-format", "accepted.instruction",
                 "--events", str(events),
                 "--limit", "0",
                 "--json",
             ],
-            stdout_path=ledger_path,
+            stdout_path=ARTIFACT / "ledger.jsonl",
             stderr_path=ARTIFACT / "ledger.stderr.log",
         )
-        ledger = read_jsonl(ledger_path)
-        if len(ledger) != len(source_rows) or any(row["status"] != "completed" for row in ledger):
-            raise AssertionError(f"ledger readback is incomplete: {ledger}")
-        write_jsonl(ARTIFACT / "session-projection.jsonl", project_sessions(ledger))
+        ledger = [json.loads(line) for line in ledger_result.stdout.splitlines() if line.strip()]
+        if len(ledger) != len(source) or any(row["status"] != "completed" for row in ledger):
+            raise AssertionError("ledger readback is incomplete")
+        write_jsonl(ARTIFACT / "session-projection.jsonl", session_projection(ledger))
 
-        show_rows = []
         by_target: dict[str, dict[str, Any]] = {}
         for row in ledger:
             by_target.setdefault(row["target"], row)
+        show_rows = []
         for target in ("sh", "herdr", "codex", "claude"):
-            selected = by_target[target]
-            completed = run(
-                [
-                    executable(binaries["worker"]), "show",
-                    "--input", str(accepted),
-                    "--input-format", "accepted.instruction",
-                    "--events", str(events),
-                    "--run", selected["run_id"],
-                    "--json",
-                ]
+            detail = json.loads(
+                run(
+                    [
+                        executable(binaries["worker"]), "show",
+                        "--input", str(queue),
+                        "--input-format", "accepted.instruction",
+                        "--events", str(events),
+                        "--run", by_target[target]["run_id"],
+                        "--json",
+                    ]
+                ).stdout
             )
-            detail = json.loads(completed.stdout)
             if detail["run"]["status"] != "completed" or not detail.get("final"):
-                raise AssertionError(f"show readback failed for {target}: {detail}")
+                raise AssertionError(f"show readback failed for {target}")
             show_rows.append(detail)
         write_jsonl(ARTIFACT / "show-readback.jsonl", show_rows)
-
-        sh_run = by_target["sh"]["run_id"]
         run(
             [
                 executable(binaries["worker"]), "tail",
                 "--events", str(events),
-                "--run", sh_run,
+                "--run", by_target["sh"]["run_id"],
                 "--follow=false",
                 "--json",
             ],
@@ -515,30 +512,50 @@ def run_whole_path(binaries: dict[str, Path]) -> None:
             stderr_path=ARTIFACT / "tail-readback.stderr.log",
         )
 
-        target_sessions = {
-            target: sorted({row.get("native_session_id") for row in ledger if row["target"] == target and row.get("native_session_id")})
-            for target in ("herdr", "codex", "claude")
-        }
         expected_sessions = {
             "herdr": ["terminal-proof-1"],
             "codex": ["thread-proof-1"],
             "claude": ["session-proof-1"],
         }
-        if target_sessions != expected_sessions:
-            raise AssertionError(f"native session readback drift: {target_sessions}")
+        actual_sessions = {
+            target: sorted(
+                {
+                    row["native_session_id"]
+                    for row in ledger
+                    if row["target"] == target and row.get("native_session_id")
+                }
+            )
+            for target in expected_sessions
+        }
+        if actual_sessions != expected_sessions:
+            raise AssertionError(f"native session readback drift: {actual_sessions}")
 
+        final_source = project / ".hq" / "final"
+        final_manifest = []
+        if final_source.exists():
+            final_artifact = ARTIFACT / "final"
+            shutil.copytree(final_source, final_artifact)
+            final_manifest = [
+                {
+                    "path": str(path.relative_to(ARTIFACT)).replace("\\", "/"),
+                    "sha256": digest(path),
+                }
+                for path in sorted(final_artifact.rglob("*"))
+                if path.is_file()
+            ]
+        write_json(ARTIFACT / "final-manifest.json", {"version": "worker.final-manifest.v1", "files": final_manifest})
         write_json(
             ARTIFACT / "readback.json",
             {
                 "version": "worker.lane-l-readback.v1",
                 "scope_issues": [79, 80, 81, 82, 83, 84],
-                "source_instruction_count": len(source_rows),
+                "source_instruction_count": len(source),
                 "completed_run_count": len(ledger),
-                "provider_process_count": len(invocations_before),
+                "provider_process_count": len(invocations),
                 "dry_run_side_effects": 0,
                 "duplicate_provider_processes": 0,
                 "shell_reparse_side_effects": 0,
-                "native_sessions": target_sessions,
+                "native_sessions": actual_sessions,
                 "all_targets": sorted({row["target"] for row in ledger}),
                 "fixture_provider": {
                     "fixture_only": True,
@@ -571,17 +588,20 @@ def main() -> None:
         "cmd/hq-worker/runtime_registry_test.go",
         "cmd/hq-worker-proof-provider/main.go",
     ]
-    formatting = run(["gofmt", "-d", *go_files])
-    write_text(ARTIFACT / "gofmt.diff", formatting.stdout)
-    if formatting.stdout.strip():
-        raise AssertionError("gofmt diff is not empty")
+    if WINDOWS:
+        write_text(ARTIFACT / "gofmt.diff", "checked by the Linux matrix job\n")
+    else:
+        formatted = run(["gofmt", "-d", *go_files])
+        write_text(ARTIFACT / "gofmt.diff", formatted.stdout)
+        if formatted.stdout.strip():
+            raise AssertionError("gofmt diff is not empty")
 
     run(
         ["go", "test", "./internal/worker/...", "./cmd/hq-worker", "./cmd/hq-worker-proof-provider"],
         stdout_path=ARTIFACT / "go-test.stdout.log",
         stderr_path=ARTIFACT / "go-test.stderr.log",
     )
-    if not IS_WINDOWS:
+    if not WINDOWS:
         run(
             ["go", "test", "-race", "./internal/worker/...", "./cmd/hq-worker"],
             stdout_path=ARTIFACT / "go-race.stdout.log",
@@ -592,21 +612,22 @@ def main() -> None:
         stdout_path=ARTIFACT / "go-vet.stdout.log",
         stderr_path=ARTIFACT / "go-vet.stderr.log",
     )
-
     contract_proof()
     binaries = build_binaries()
-    versions = {
-        "version": "worker.lane-l-versions.v1",
-        "os": platform.platform(),
-        "python": sys.version,
-        "go": run(["go", "version"]).stdout.strip(),
-        "providers": {
-            provider: run([executable(binaries[provider]), "--version"]).stdout.strip()
-            for provider in ("sh", "herdr", "codex", "claude")
+    write_json(
+        ARTIFACT / "versions.json",
+        {
+            "version": "worker.lane-l-versions.v1",
+            "os": platform.platform(),
+            "python": sys.version,
+            "go": run(["go", "version"]).stdout.strip(),
+            "providers": {
+                name: run([executable(binaries[name]), "--version"]).stdout.strip()
+                for name in ("sh", "herdr", "codex", "claude")
+            },
         },
-    }
-    write_json(ARTIFACT / "versions.json", versions)
-    run_whole_path(binaries)
+    )
+    whole_path(binaries)
     write_text(ARTIFACT / "result.txt", "worker lane L whole-path proof passed\n")
 
 
