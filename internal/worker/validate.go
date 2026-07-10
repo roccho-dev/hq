@@ -15,7 +15,7 @@ type Contract struct {
 }
 
 func DefaultContract() Contract {
-	return Contract{Version: InstructionVersionV1, Targets: map[string]struct{}{"sh": {}, "herdr": {}, "codex": {}, "claude": {}}}
+	return Contract{Version: InstructionVersionV1, Targets: map[string]struct{}{"sh": {}, "herdr": {}, "codex": {}, "claude": {}, "host": {}}}
 }
 
 func (c Contract) Validate(row ReadRow) []Diagnostic {
@@ -34,7 +34,7 @@ func (c Contract) Validate(row ReadRow) []Diagnostic {
 		out = append(out, invalid("unknown_op", "op", "op must be run in instruction.v1"))
 	}
 	if _, ok := c.Targets[inst.Target]; !ok {
-		out = append(out, invalid("unknown_target", "target", "target must be sh, herdr, codex, or claude"))
+		out = append(out, invalid("unknown_target", "target", "target must be sh, herdr, codex, claude, or host"))
 	}
 	if !isRFC3339UTC(inst.CreatedAt) {
 		out = append(out, invalid("invalid_created_at", "created_at", "created_at must be RFC3339 UTC ending in Z"))
@@ -92,13 +92,14 @@ func validatePayload(target string, raw json.RawMessage) []Diagnostic {
 	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) || json.Unmarshal(trimmed, &payload) != nil || payload == nil {
 		return []Diagnostic{invalid("invalid_payload", "payload", "payload must be a JSON object")}
 	}
-	if target != "sh" {
-		switch target {
-		case "herdr", "codex", "claude":
-			return validateAgentPayload(target, payload)
-		default:
-			return nil
-		}
+	switch target {
+	case "herdr", "codex", "claude":
+		return validateAgentPayload(target, payload)
+	case "host":
+		return validateHostPayload(payload)
+	case "sh":
+	default:
+		return nil
 	}
 	allowed := map[string]struct{}{"cwd": {}, "argv": {}}
 	for key := range payload {
@@ -120,6 +121,24 @@ func validatePayload(target string, raw json.RawMessage) []Diagnostic {
 		if json.Unmarshal(rawCWD, &cwd) != nil || strings.TrimSpace(cwd) == "" {
 			return []Diagnostic{invalid("invalid_payload", "payload.cwd", "cwd must be a non-empty string")}
 		}
+	}
+	return nil
+}
+
+func validateHostPayload(payload map[string]json.RawMessage) []Diagnostic {
+	allowed := map[string]struct{}{"capability": {}, "path": {}}
+	for key := range payload {
+		if _, ok := allowed[key]; !ok {
+			return []Diagnostic{invalid("invalid_payload", "payload."+key, "unsupported host payload field")}
+		}
+	}
+	var capabilityID string
+	if json.Unmarshal(payload["capability"], &capabilityID) != nil || capabilityID != "host.open" {
+		return []Diagnostic{invalid("invalid_payload", "payload.capability", "capability must be host.open")}
+	}
+	var path string
+	if json.Unmarshal(payload["path"], &path) != nil || strings.TrimSpace(path) == "" {
+		return []Diagnostic{invalid("invalid_payload", "payload.path", "path must be a non-empty string")}
 	}
 	return nil
 }
