@@ -7,13 +7,19 @@ import (
 	"testing"
 )
 
-func TestCoreHasNoConcreteExternalSchemaTerms(t *testing.T) {
+func TestCoreHasNoConcreteExternalSchemaOrAdapterTerms(t *testing.T) {
 	for _, term := range []string{
 		"ADRS projected",
 		"adrs.projected",
 		"DefaultSchemaJSONL",
 		"queue envelope",
 		"source_ref",
+		"queue.create",
+		"queue.dispatch",
+		"queue.preview",
+		"herdr",
+		"codex",
+		"claude",
 	} {
 		assertCoreSourceDoesNotContain(t, term)
 	}
@@ -33,8 +39,8 @@ func assertCoreSourceDoesNotContain(t *testing.T, term string) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(string(b), term) {
-			t.Fatalf("core file %s contains concrete schema term %q", path, term)
+		if strings.Contains(strings.ToLower(string(b)), strings.ToLower(term)) {
+			t.Fatalf("core file %s contains concrete schema or adapter term %q", path, term)
 		}
 	}
 }
