@@ -9,10 +9,10 @@ import (
 )
 
 func newRuntimeRegistry() (*adapter.Registry, error) {
-	runner := agentadapter.OSRunner{}
-	registrations := []adapter.Registration{{Target: "sh", Adapter: agentadapter.Sh{Runner: runner}}}
+	providerRunner := agentadapter.OSRunner{}
+	registrations := []adapter.Registration{{Target: "sh", Adapter: agentadapter.Sh{Runner: agentadapter.DirectOSRunner{}}}}
 	registrations = append(registrations, agentadapter.Registrations(agentadapter.Config{
-		Runner:     runner,
+		Runner:     providerRunner,
 		HerdrPath:  executablePath("HQ_HERDR_PATH", "herdr"),
 		CodexPath:  executablePath("HQ_CODEX_PATH", "codex"),
 		ClaudePath: executablePath("HQ_CLAUDE_PATH", "claude"),
