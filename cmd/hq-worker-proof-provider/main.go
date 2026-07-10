@@ -18,14 +18,14 @@ import (
 )
 
 type invocation struct {
-	Version      string   `json:"version"`
-	FixtureOnly  bool     `json:"fixture_only"`
-	Provider     string   `json:"provider"`
-	Argv         []string `json:"argv"`
-	StdinBytes   int      `json:"stdin_bytes"`
-	StdinSHA256  string   `json:"stdin_sha256"`
-	StdinBase64  string   `json:"stdin_base64,omitempty"`
-	WorkingDir   string   `json:"working_dir"`
+	Version     string   `json:"version"`
+	FixtureOnly bool     `json:"fixture_only"`
+	Provider    string   `json:"provider"`
+	Argv        []string `json:"argv"`
+	StdinBytes  int      `json:"stdin_bytes"`
+	StdinSHA256 string   `json:"stdin_sha256"`
+	StdinBase64 string   `json:"stdin_base64,omitempty"`
+	WorkingDir  string   `json:"working_dir"`
 }
 
 func main() {
