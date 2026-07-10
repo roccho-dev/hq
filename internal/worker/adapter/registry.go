@@ -11,122 +11,83 @@ import (
 const RegistryVersion = "adapter.registry.v1"
 
 type Registration struct {
-	Target  string
+	Target string
 	Adapter Adapter
+	Provider *ProviderDescriptor
 }
 
 type Registry struct {
-	adapters map[string]Adapter
-	targets  []string
+	registrations map[string]Registration
+	targets []string
 }
 
 func NewRegistry(registrations ...Registration) (*Registry, error) {
-	adapters := make(map[string]Adapter, len(registrations))
+	entries := make(map[string]Registration, len(registrations))
 	for _, registration := range registrations {
-		if !IsCanonicalTarget(registration.Target) {
-			return nil, fmt.Errorf("target %q is not part of instruction.v1", registration.Target)
+		if !IsCanonicalTarget(registration.Target) { return nil, fmt.Errorf("target %q is not part of instruction.v1", registration.Target) }
+		if isNilAdapter(registration.Adapter) { return nil, fmt.Errorf("adapter for target %q is nil", registration.Target) }
+		if _, exists := entries[registration.Target]; exists { return nil, fmt.Errorf("adapter target %q is registered twice", registration.Target) }
+		if registration.Provider != nil {
+			if err := registration.Provider.Validate(); err != nil { return nil, fmt.Errorf("provider for target %q: %w", registration.Target, err) }
+			copy := *registration.Provider
+			registration.Provider = &copy
 		}
-		if isNilAdapter(registration.Adapter) {
-			return nil, fmt.Errorf("adapter for target %q is nil", registration.Target)
-		}
-		if _, exists := adapters[registration.Target]; exists {
-			return nil, fmt.Errorf("adapter target %q is registered twice", registration.Target)
-		}
-		adapters[registration.Target] = registration.Adapter
+		entries[registration.Target] = registration
 	}
-	targets := make([]string, 0, len(adapters))
-	for target := range adapters {
-		targets = append(targets, target)
-	}
+	targets := make([]string, 0, len(entries))
+	for target := range entries { targets = append(targets, target) }
 	sort.Strings(targets)
-	return &Registry{adapters: adapters, targets: targets}, nil
+	return &Registry{registrations: entries, targets: targets}, nil
 }
 
 func (r *Registry) Resolve(target string) (Adapter, error) {
-	if r == nil {
-		return nil, errors.New("adapter registry is nil")
-	}
-	if !IsCanonicalTarget(target) {
-		return nil, &UnknownTargetError{Target: target}
-	}
-	resolved, ok := r.adapters[target]
-	if !ok {
-		return nil, &AdapterUnavailableError{Target: target}
-	}
+	registration, err := r.ResolveRegistration(target)
+	if err != nil { return nil, err }
+	return registration.Adapter, nil
+}
+
+func (r *Registry) ResolveRegistration(target string) (Registration, error) {
+	if r == nil { return Registration{}, errors.New("adapter registry is nil") }
+	if !IsCanonicalTarget(target) { return Registration{}, &UnknownTargetError{Target: target} }
+	resolved, ok := r.registrations[target]
+	if !ok { return Registration{}, &AdapterUnavailableError{Target: target} }
+	if resolved.Provider != nil { copy := *resolved.Provider; resolved.Provider = &copy }
 	return resolved, nil
 }
 
 func (r *Registry) Snapshot() RegistrySnapshot {
-	if r == nil {
-		return RegistrySnapshot{Version: RegistryVersion, Targets: []string{}}
-	}
+	if r == nil { return RegistrySnapshot{Version: RegistryVersion, Targets: []string{}} }
 	return RegistrySnapshot{Version: RegistryVersion, Targets: append([]string(nil), r.targets...)}
 }
 
-type RegistrySnapshot struct {
-	Version string   `json:"version"`
-	Targets []string `json:"targets"`
-}
-
+type RegistrySnapshot struct { Version string `json:"version"`; Targets []string `json:"targets"` }
 type UnknownTargetError struct{ Target string }
-
-func (e *UnknownTargetError) Error() string {
-	return fmt.Sprintf("target %q is not part of instruction.v1", e.Target)
-}
-
+func (e *UnknownTargetError) Error() string { return fmt.Sprintf("target %q is not part of instruction.v1", e.Target) }
 type AdapterUnavailableError struct{ Target string }
-
-func (e *AdapterUnavailableError) Error() string {
-	return fmt.Sprintf("no adapter registered for canonical target %q", e.Target)
-}
+func (e *AdapterUnavailableError) Error() string { return fmt.Sprintf("no adapter registered for canonical target %q", e.Target) }
 
 type FailureClass string
+const ( FailureFailed FailureClass = "failed"; FailureBlocked FailureClass = "blocked" )
 
-const (
-	FailureFailed  FailureClass = "failed"
-	FailureBlocked FailureClass = "blocked"
-)
-
-// FailureError lets an adapter return a stable transient failure without
-// owning the durable result.v1 envelope or lifecycle identity.
-type FailureError struct {
-	Class     FailureClass
-	Code      string
-	Message   string
-	Retryable bool
-}
-
+type FailureError struct { Class FailureClass; Code string; Message string; Retryable bool }
 func (e *FailureError) Error() string { return e.Message }
-
 func (e *FailureError) Validate() error {
-	if e == nil {
-		return errors.New("failure is nil")
-	}
-	if e.Class != FailureFailed && e.Class != FailureBlocked {
-		return fmt.Errorf("invalid failure class %q", e.Class)
-	}
-	if strings.TrimSpace(e.Code) == "" || strings.TrimSpace(e.Message) == "" {
-		return errors.New("failure code and message are required")
-	}
+	if e == nil { return errors.New("failure is nil") }
+	if e.Class != FailureFailed && e.Class != FailureBlocked { return fmt.Errorf("invalid failure class %q", e.Class) }
+	if strings.TrimSpace(e.Code) == "" || strings.TrimSpace(e.Message) == "" { return errors.New("failure code and message are required") }
 	return nil
 }
-
 func NewBlockedError(code, message string) error {
-	if strings.TrimSpace(code) == "" {
-		code = "policy_blocked"
-	}
+	if strings.TrimSpace(code) == "" { code = "policy_blocked" }
 	return &FailureError{Class: FailureBlocked, Code: code, Message: message}
 }
 
 func isNilAdapter(candidate Adapter) bool {
-	if candidate == nil {
-		return true
-	}
+	if candidate == nil { return true }
 	value := reflect.ValueOf(candidate)
 	switch value.Kind() {
 	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
 		return value.IsNil()
-	default:
-		return false
+	default: return false
 	}
 }
