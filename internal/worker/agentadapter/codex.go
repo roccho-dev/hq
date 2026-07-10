@@ -75,11 +75,11 @@ func (a Codex) Run(ctx context.Context, request adapter.Request, emit adapter.Em
 		args = append(args, "--skip-git-repo-check")
 	}
 	if payload.Action == "resume" {
-		args = append(args, "resume", payload.SessionID, payload.Prompt)
+		args = append(args, "resume", payload.SessionID, "-")
 	} else {
-		args = append(args, payload.Prompt)
+		args = append(args, "-")
 	}
-	result, runErr := runner.Run(ctx, Command{Path: path, Args: args, Dir: cwd})
+	result, runErr := runner.Run(ctx, Command{Path: path, Args: args, Dir: cwd, Stdin: []byte(payload.Prompt)})
 	if emitErr := emitStderr(result, payload.SessionID, emit); emitErr != nil {
 		return adapter.Completion{}, emitErr
 	}
