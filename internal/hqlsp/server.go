@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 	"unicode/utf16"
 	"unicode/utf8"
 
@@ -70,7 +71,7 @@ func (s *Server) handle(w io.Writer, msg message) error {
 		return writeMessage(w, message{JSONRPC: "2.0", ID: msg.ID, Result: map[string]any{
 			"capabilities": map[string]any{
 				"textDocumentSync":       1,
-				"completionProvider":     map[string]any{"triggerCharacters": []string{"{", "\"", ":", ","}},
+				"completionProvider":     map[string]any{"triggerCharacters": []string{"{", "\"", ":", ",", ".", " ", "="}},
 				"codeActionProvider":     true,
 				"executeCommandProvider": map[string]any{"commands": []string{"hq.submit"}},
 			},
@@ -149,13 +150,22 @@ func (s *Server) complete(w io.Writer, msg message) error {
 	suggestions := hq.Complete(doc.Text, cursor, s.world)
 	items := make([]map[string]any, 0, len(suggestions))
 	for _, suggestion := range suggestions {
+		start, startErr := positionAtByte(doc.Text, suggestion.Edit.Start)
+		end, endErr := positionAtByte(doc.Text, suggestion.Edit.End)
+		if startErr != nil || endErr != nil {
+			return writeError(w, msg.ID, -32603, "completion edit is outside document")
+		}
 		items = append(items, map[string]any{
 			"label":            suggestion.Label,
 			"detail":           suggestion.Detail,
 			"kind":             14,
 			"insertText":       suggestion.InsertText,
 			"insertTextFormat": 1,
-			"data":             map[string]any{"compileDraft": suggestion.Draft, "deploymentId": s.profile.DeploymentID},
+			"textEdit": map[string]any{
+				"range":   map[string]any{"start": start, "end": end},
+				"newText": suggestion.Edit.Text,
+			},
+			"data": map[string]any{"compileDraft": suggestion.Draft, "deploymentId": s.profile.DeploymentID},
 		})
 	}
 	return writeMessage(w, message{JSONRPC: "2.0", ID: msg.ID, Result: map[string]any{"isIncomplete": false, "items": items}})
@@ -170,13 +180,23 @@ func (s *Server) codeAction(w io.Writer, msg message) error {
 	if !ok {
 		return writeMessage(w, message{JSONRPC: "2.0", ID: msg.ID, Result: []any{}})
 	}
+	var request struct {
+		Range struct {
+			Start struct {
+				Line int `json:"line"`
+			} `json:"start"`
+		} `json:"range"`
+	}
+	if err := json.Unmarshal(msg.Params, &request); err != nil {
+		return writeError(w, msg.ID, -32602, err.Error())
+	}
 	actions := []map[string]any{{
 		"title": "HQ Submit",
 		"kind":  "quickfix",
 		"command": map[string]any{
 			"title":     "HQ Submit",
 			"command":   "hq.submit",
-			"arguments": []any{map[string]any{"uri": uri, "version": doc.Version}},
+			"arguments": []any{map[string]any{"uri": uri, "version": doc.Version, "line": request.Range.Start.Line}},
 		},
 	}}
 	return writeMessage(w, message{JSONRPC: "2.0", ID: msg.ID, Result: actions})
@@ -188,6 +208,7 @@ func (s *Server) executeCommand(w io.Writer, msg message) error {
 		Arguments []struct {
 			URI     string `json:"uri"`
 			Version int    `json:"version"`
+			Line    int    `json:"line"`
 		} `json:"arguments"`
 	}
 	if err := json.Unmarshal(msg.Params, &p); err != nil {
@@ -201,7 +222,11 @@ func (s *Server) executeCommand(w io.Writer, msg message) error {
 	if !ok || doc.Version != arg.Version {
 		return writeError(w, msg.ID, -32602, "document version is missing or stale")
 	}
-	draft, acceptedID, err := finalizeExplicitAcceptance(hq.CompileLine(doc.Text, s.world))
+	draft, err := s.compileSubmit(doc.Text, arg.Line)
+	if err != nil {
+		return writeError(w, msg.ID, -32602, err.Error())
+	}
+	draft, acceptedID, err := finalizeExplicitAcceptance(draft)
 	if err != nil {
 		return writeError(w, msg.ID, -32603, err.Error())
 	}
@@ -216,6 +241,23 @@ func (s *Server) executeCommand(w io.Writer, msg message) error {
 		"deploymentId": s.profile.DeploymentID,
 	}
 	return writeMessage(w, message{JSONRPC: "2.0", ID: msg.ID, Result: result})
+}
+
+func (s *Server) compileSubmit(text string, line int) (hq.CompileDraft, error) {
+	if len(s.world.Commands) == 0 {
+		return hq.CompileLine(text, s.world), nil
+	}
+	commandLine, err := hq.LineAt(text, line)
+	if err != nil {
+		return hq.CompileDraft{}, err
+	}
+	if strings.HasPrefix(strings.TrimSpace(commandLine), "{") {
+		if !json.Valid([]byte(strings.TrimSpace(commandLine))) {
+			return hq.CompileDraft{}, errors.New("submit line is not one complete JSON object")
+		}
+		return hq.CompileLine(commandLine, s.world), nil
+	}
+	return hq.CompileCommandObject(text, line, s.world)
 }
 
 func finalizeExplicitAcceptance(draft hq.CompileDraft) (hq.CompileDraft, string, error) {
@@ -237,6 +279,9 @@ func finalizeExplicitAcceptance(draft hq.CompileDraft) (hq.CompileDraft, string,
 	}
 	acceptedID := "ins-lsp-" + hex.EncodeToString(random)
 	instruction["id"] = acceptedID
+	if _, ok := instruction["created_at"]; !ok {
+		instruction["created_at"] = time.Now().UTC().Format(time.RFC3339Nano)
+	}
 	instructionJSON, err := json.Marshal(instruction)
 	if err != nil {
 		return hq.CompileDraft{}, "", err
@@ -256,6 +301,18 @@ func finalizeExplicitAcceptance(draft hq.CompileDraft) (hq.CompileDraft, string,
 func (s *Server) publishDiagnostics(w io.Writer, uri string) error {
 	doc := s.documents[uri]
 	diagnostics := []map[string]any{}
+	if len(s.world.Commands) > 0 {
+		for _, diagnostic := range hq.ValidateCommandDocument(doc.Text, s.world) {
+			diagnostics = append(diagnostics, map[string]any{
+				"range": map[string]any{
+					"start": map[string]int{"line": diagnostic.Line, "character": diagnostic.Start},
+					"end":   map[string]int{"line": diagnostic.Line, "character": diagnostic.End},
+				},
+				"severity": 1, "source": "hq", "code": diagnostic.Code, "message": diagnostic.Message,
+			})
+		}
+		return writeMessage(w, message{JSONRPC: "2.0", Method: "textDocument/publishDiagnostics", Params: mustJSON(map[string]any{"uri": uri, "version": doc.Version, "diagnostics": diagnostics})})
+	}
 	trimmed := strings.TrimSpace(doc.Text)
 	if trimmed != "" && !json.Valid([]byte(trimmed)) {
 		diagnostics = append(diagnostics, map[string]any{
@@ -270,6 +327,17 @@ func (s *Server) publishDiagnostics(w io.Writer, uri string) error {
 		})
 	}
 	return writeMessage(w, message{JSONRPC: "2.0", Method: "textDocument/publishDiagnostics", Params: mustJSON(map[string]any{"uri": uri, "version": doc.Version, "diagnostics": diagnostics})})
+}
+
+func positionAtByte(text string, offset int) (map[string]int, error) {
+	if offset < 0 || offset > len(text) || !utf8.ValidString(text[:offset]) {
+		return nil, errors.New("byte offset is outside document")
+	}
+	prefix := text[:offset]
+	line := strings.Count(prefix, "\n")
+	lineStart := strings.LastIndex(prefix, "\n") + 1
+	character := len(utf16.Encode([]rune(prefix[lineStart:])))
+	return map[string]int{"line": line, "character": character}, nil
 }
 
 func appendAndSync(path string, draft hq.CompileDraft) error {

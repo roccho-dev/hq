@@ -36,6 +36,12 @@ func Complete(buffer string, cursor int, world *JsonlWorld) []Suggestion {
 	if world == nil {
 		world = DefaultWorld()
 	}
+	if len(world.Commands) > 0 {
+		line, _ := currentLine(buffer, cursor)
+		if !strings.HasPrefix(strings.TrimSpace(line), "{") {
+			return commandSuggestions(buffer, cursor, world)
+		}
+	}
 	ctx := Analyze(buffer, cursor, world)
 	switch ctx.Kind {
 	case CursorValue:

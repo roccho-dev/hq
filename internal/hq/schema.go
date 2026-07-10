@@ -9,6 +9,8 @@ import (
 
 // SchemaKey is the canonical core protocol key type.
 type SchemaKey = core.SchemaKey
+type CommandField = core.CommandField
+type CommandDefinition = core.CommandDefinition
 
 // JsonlWorld is the canonical core protocol world type.
 type JsonlWorld = core.JsonlWorld

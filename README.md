@@ -4,6 +4,12 @@
 
 It reads an adapter-provided JSONL world plus the user's cursor context, returns compile-ready suggestions, accepts one human-selected draft, and may append that accepted instruction as one JSONL row. It does not execute the instruction.
 
+Profile worlds may also declare human-facing `hq.command.v1` records. In that
+mode Vim edits one `@command` object with one `name=value` field per line; the
+same generic compiler derives completion, diagnostics, and canonical
+instruction lowering entirely from world data. See
+[`docs/architecture/data-driven-command-language.md`](docs/architecture/data-driven-command-language.md).
+
 > `hq is meaning-free; JSONL carries meaning; a downstream worker executes.`
 
 ```text

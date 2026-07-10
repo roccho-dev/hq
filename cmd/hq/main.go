@@ -43,11 +43,18 @@ func main() {
 		return
 	}
 	if flagWasSet("draft") {
-		writeJSON(os.Stdout, hq.CompileLine(*draft, world))
+		d, err := compileUserLine(*draft, world)
+		if err != nil {
+			fatal(err)
+		}
+		writeJSON(os.Stdout, d)
 		return
 	}
 	if flagWasSet("accept") {
-		d := hq.CompileLine(*accept, world)
+		d, err := compileUserLine(*accept, world)
+		if err != nil {
+			fatal(err)
+		}
 		if *queuePath != "" {
 			if err := appendOne(*queuePath, d); err != nil {
 				fatal(err)
@@ -90,7 +97,7 @@ func runInteractive(world *hq.JsonlWorld, queuePath string, banner bool) error {
 		if len(sugs) > 0 {
 			draft = sugs[0].Draft
 		} else {
-			draft = hq.CompileLine(line, world)
+			draft, _ = compileUserLine(line, world)
 		}
 		b, _ := json.Marshal(draft)
 		rl.Printf("compileDraft %s", string(b))
@@ -167,7 +174,11 @@ func runInteractive(world *hq.JsonlWorld, queuePath string, banner bool) error {
 		if trimmed == "exit" || trimmed == "quit" {
 			return nil
 		}
-		d := hq.CompileLine(line, world)
+		d, err := compileUserLine(line, world)
+		if err != nil {
+			fmt.Printf("[REJECT] %s\n", err)
+			continue
+		}
 		b, _ := json.Marshal(d)
 		fmt.Printf("[ACCEPT] %s\n", string(b))
 		if queueFile != nil {
@@ -176,6 +187,13 @@ func runInteractive(world *hq.JsonlWorld, queuePath string, banner bool) error {
 			}
 		}
 	}
+}
+
+func compileUserLine(line string, world *hq.JsonlWorld) (hq.CompileDraft, error) {
+	if world != nil && len(world.Commands) > 0 && !strings.HasPrefix(strings.TrimSpace(line), "{") {
+		return hq.CompileCommandLine(line, world)
+	}
+	return hq.CompileLine(line, world), nil
 }
 
 func loadWorld(path string) (*hq.JsonlWorld, error) {
