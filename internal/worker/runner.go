@@ -112,17 +112,25 @@ func (r Runner) Process(ctx context.Context, rows []ReadRow, prior LogData, repl
 			return emitted, unsuccessful, fmt.Errorf("digest instruction %q: %w", row.Instruction.ID, err)
 		}
 		baseDecision := r.Engine.Policy.Evaluate(row.Instruction)
-		approvalDecision := workersafety.EvaluatePolicy(workersafety.PolicyRequest{
-			InstructionID: row.Instruction.ID,
-			RunID:         runID,
-			Target:        row.Instruction.Target,
-			Operation:     row.Instruction.Op,
+		finalDecision := workersafety.EvaluatePolicy(workersafety.PolicyRequest{
+			InstructionID:     row.Instruction.ID,
+			RunID:             runID,
+			Target:            row.Instruction.Target,
+			Operation:         row.Instruction.Op,
 			InstructionDigest: digest,
 			Risk:              workersafety.RiskDangerous,
 			Policy:            workersafety.ExecutionPolicy{RequireApproval: true},
 			Approval:          r.Approvals.ApprovalFor(row.Instruction.ID),
 		})
-		if err := appendEntry(PolicyEntry(approvalDecision)); err != nil {
+		policyMessage := "dispatch denied by exact digest-bound approval policy"
+		if !baseDecision.Allowed {
+			finalDecision.Status = workersafety.PolicyBlocked
+			finalDecision.Reason = baseDecision.Code
+			finalDecision.MayDispatch = false
+			finalDecision.ApprovedBy = ""
+			policyMessage = baseDecision.Message
+		}
+		if err := appendEntry(PolicyEntry(finalDecision)); err != nil {
 			return emitted, unsuccessful, err
 		}
 
@@ -138,16 +146,8 @@ func (r Runner) Process(ctx context.Context, rows []ReadRow, prior LogData, repl
 			seq++
 		}
 
-		if !baseDecision.Allowed {
-			blocked := blockedResult(runID, row.Instruction, seq, clock(), baseDecision.Code, baseDecision.Message, false)
-			if err := appendEntry(ResultEntry(blocked)); err != nil {
-				return emitted, unsuccessful, err
-			}
-			unsuccessful++
-			continue
-		}
-		if !approvalDecision.MayDispatch {
-			blocked := blockedResult(runID, row.Instruction, seq, clock(), approvalDecision.Reason, "dispatch denied by exact digest-bound approval policy", false)
+		if !finalDecision.MayDispatch {
+			blocked := blockedResult(runID, row.Instruction, seq, clock(), finalDecision.Reason, policyMessage, false)
 			if err := appendEntry(ResultEntry(blocked)); err != nil {
 				return emitted, unsuccessful, err
 			}
