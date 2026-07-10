@@ -2,8 +2,11 @@ package agentadapter
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"hq/internal/worker/adapter"
 )
@@ -75,6 +78,12 @@ func (p HerdrPayload) validate() error {
 		if strings.TrimSpace(p.Agent) == "" {
 			return blocked("invalid_payload", "herdr attach requires agent")
 		}
+		if p.Takeover {
+			return blocked("interactive_attach_forbidden", "worker attach is read-only and cannot take terminal control")
+		}
+		if p.TimeoutMS < 0 {
+			return blocked("invalid_payload", "herdr timeout_ms must be non-negative")
+		}
 	default:
 		return blocked("invalid_payload", "herdr action must be start, read, observe, or attach")
 	}
@@ -108,7 +117,7 @@ func (a Herdr) Run(ctx context.Context, request adapter.Request, emit adapter.Em
 	case "observe":
 		return a.observe(ctx, runner, path, request, payload, emit)
 	case "attach":
-		return adapter.Completion{FinalText: "Herdr attach target recorded", NativeSessionID: stringPointer(payload.Agent)}, nil
+		return a.attach(ctx, runner, path, request, payload, emit)
 	default:
 		return adapter.Completion{}, blocked("invalid_payload", "unsupported Herdr action")
 	}
@@ -140,10 +149,14 @@ func (a Herdr) start(ctx context.Context, runner Runner, path string, request ad
 	if err != nil {
 		return adapter.Completion{}, err
 	}
-	if emitErr := emitLines(adapter.OutputStdout, result.Stdout, payload.Name, emit); emitErr != nil {
+	nativeID, parseErr := parseHerdrStartID(result.Stdout)
+	if parseErr != nil {
+		return adapter.Completion{}, parseErr
+	}
+	if emitErr := emitLines(adapter.OutputStdout, result.Stdout, nativeID, emit); emitErr != nil {
 		return adapter.Completion{}, emitErr
 	}
-	return adapter.Completion{FinalText: fmt.Sprintf("Herdr agent %s started", payload.Name), NativeSessionID: stringPointer(payload.Name)}, nil
+	return adapter.Completion{FinalText: fmt.Sprintf("Herdr agent %s started as %s", payload.Name, nativeID), NativeSessionID: stringPointer(nativeID)}, nil
 }
 
 func (a Herdr) read(ctx context.Context, runner Runner, path string, request adapter.Request, payload HerdrPayload, emit adapter.Emit) (adapter.Completion, error) {
@@ -193,4 +206,62 @@ func (a Herdr) observe(ctx context.Context, runner Runner, path string, request 
 		payload.Source = "recent-unwrapped"
 	}
 	return a.read(ctx, runner, path, request, payload, emit)
+}
+
+func (a Herdr) attach(ctx context.Context, runner Runner, path string, request adapter.Request, payload HerdrPayload, emit adapter.Emit) (adapter.Completion, error) {
+	timeout := payload.TimeoutMS
+	if timeout == 0 {
+		timeout = 2000
+	}
+	followContext, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Millisecond)
+	defer cancel()
+	result, err := runner.Run(followContext, Command{Path: path, Args: []string{"terminal", "session", "observe", payload.Agent}, Dir: effectiveDir(request, payload.CWD)})
+	if emitErr := emitStderr(result, payload.Agent, emit); emitErr != nil {
+		return adapter.Completion{}, emitErr
+	}
+	if emitErr := emitLines(adapter.OutputStdout, result.Stdout, payload.Agent, emit); emitErr != nil {
+		return adapter.Completion{}, emitErr
+	}
+	if err != nil && !(errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil) {
+		return adapter.Completion{}, err
+	}
+	text := strings.TrimSpace(string(result.Stdout))
+	if text == "" {
+		text = fmt.Sprintf("Herdr agent %s follow window completed with no frame", payload.Agent)
+	}
+	return adapter.Completion{FinalText: text, NativeSessionID: stringPointer(payload.Agent)}, nil
+}
+
+func parseHerdrStartID(raw []byte) (string, error) {
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", failure("protocol_error", "Herdr start emitted malformed JSON", false)
+	}
+	for _, key := range []string{"terminal_id", "pane_id"} {
+		if found := findJSONString(value, key); found != "" {
+			return found, nil
+		}
+	}
+	return "", failure("protocol_error", "Herdr start response is missing terminal_id/pane_id", false)
+}
+
+func findJSONString(value any, key string) string {
+	switch typed := value.(type) {
+	case map[string]any:
+		if raw, ok := typed[key].(string); ok && strings.TrimSpace(raw) != "" {
+			return strings.TrimSpace(raw)
+		}
+		for _, child := range typed {
+			if found := findJSONString(child, key); found != "" {
+				return found
+			}
+		}
+	case []any:
+		for _, child := range typed {
+			if found := findJSONString(child, key); found != "" {
+				return found
+			}
+		}
+	}
+	return ""
 }
