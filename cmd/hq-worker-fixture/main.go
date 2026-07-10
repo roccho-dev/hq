@@ -14,6 +14,8 @@ func main() {
 	stdout := flag.String("stdout", "", "text written to stdout")
 	stderr := flag.String("stderr", "", "text written to stderr")
 	argsFile := flag.String("args-file", "", "optional JSON file receiving positional arguments")
+	envKey := flag.String("env-key", "", "optional environment key to inspect")
+	envFile := flag.String("env-file", "", "optional file receiving the inspected environment value")
 	sentinel := flag.String("sentinel", "", "optional file appended once when the process starts")
 	sleep := flag.Duration("sleep", 0, "optional delay before exit")
 	exitCode := flag.Int("exit-code", 0, "process exit code")
@@ -39,6 +41,11 @@ func main() {
 		}
 		encoded = append(encoded, '\n')
 		if err := os.WriteFile(*argsFile, encoded, 0o600); err != nil {
+			fatal(err)
+		}
+	}
+	if *envFile != "" {
+		if err := os.WriteFile(*envFile, []byte(os.Getenv(*envKey)), 0o600); err != nil {
 			fatal(err)
 		}
 	}
