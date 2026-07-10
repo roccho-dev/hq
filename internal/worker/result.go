@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-var canonicalTargets = map[string]struct{}{"sh": {}, "herdr": {}, "codex": {}, "claude": {}}
+var canonicalTargets = map[string]struct{}{"sh": {}, "herdr": {}, "codex": {}, "claude": {}, "host": {}}
 
 func (r ResultRow) Validate() error {
 	if strings.TrimSpace(r.EventID) == "" {
@@ -37,8 +37,20 @@ func (r ResultRow) Validate() error {
 	if r.NativeSessionID != nil && strings.TrimSpace(*r.NativeSessionID) == "" {
 		return errors.New("native_session_id cannot be empty")
 	}
+	if r.Provider != nil {
+		if r.Kind != ResultStarted {
+			return errors.New("provider evidence is allowed only on started results")
+		}
+		if err := r.Provider.Validate(); err != nil {
+			return err
+		}
+	}
 	switch r.Kind {
-	case ResultAccepted, ResultStarted:
+	case ResultAccepted:
+		if r.Message != nil || r.Final != nil || r.Error != nil || r.Provider != nil {
+			return fmt.Errorf("%s cannot carry message, final, error, or provider", r.Kind)
+		}
+	case ResultStarted:
 		if r.Message != nil || r.Final != nil || r.Error != nil {
 			return fmt.Errorf("%s cannot carry message, final, or error", r.Kind)
 		}
@@ -62,14 +74,26 @@ func (r ResultRow) Validate() error {
 	}
 	return nil
 }
-
+func (p ProviderEvidence) Validate() error {
+	for f, v := range map[string]string{"capability_id": p.CapabilityID, "provider_id": p.ProviderID, "contract_version": p.ContractVersion, "deployment_id": p.DeploymentID, "provider_kind": p.ProviderKind, "integrity_digest": p.IntegrityDigest} {
+		if strings.TrimSpace(v) == "" {
+			return fmt.Errorf("provider %s is required", f)
+		}
+	}
+	if (p.IdempotencyContract == "") != (p.IdempotencyKey == "") {
+		return errors.New("idempotency_contract and idempotency_key must appear together")
+	}
+	return nil
+}
+func (p ProviderEvidence) SameProvider(o ProviderEvidence) bool {
+	return p.CapabilityID == o.CapabilityID && p.ProviderID == o.ProviderID && p.ContractVersion == o.ContractVersion && p.DeploymentID == o.DeploymentID && p.ProviderKind == o.ProviderKind && p.IntegrityDigest == o.IntegrityDigest && p.IdempotencyContract == o.IdempotencyContract
+}
 func (e ResultError) Validate() error {
 	if strings.TrimSpace(e.Code) == "" || strings.TrimSpace(e.Message) == "" {
 		return errors.New("error code and message are required")
 	}
 	return nil
 }
-
 func (v ValidationRow) Validate() error {
 	if v.Version != ValidationVersionV1 {
 		return fmt.Errorf("version must be %q", ValidationVersionV1)
@@ -93,15 +117,14 @@ func (v ValidationRow) Validate() error {
 	}
 	return nil
 }
-
 func decodeStrict(data []byte, out any) error {
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(out); err != nil {
+	d := json.NewDecoder(bytes.NewReader(data))
+	d.DisallowUnknownFields()
+	if err := d.Decode(out); err != nil {
 		return err
 	}
 	var extra any
-	if err := dec.Decode(&extra); err != io.EOF {
+	if err := d.Decode(&extra); err != io.EOF {
 		if err == nil {
 			return errors.New("multiple JSON values in one row")
 		}

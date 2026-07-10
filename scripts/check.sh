@@ -9,7 +9,10 @@ trap 'rm -rf "$work"' EXIT
 
 mkdir -p dist artifacts
 
-go test ./...
+if ! go test ./... >artifacts/go-test.log 2>&1; then
+  tail -n 40 artifacts/go-test.log >&2
+  exit 1
+fi
 python3 -m unittest discover -s tests -p 'test_protocol_contract*.py'
 go build -o dist/hq-linux-amd64 ./cmd/hq
 GOOS=windows GOARCH=amd64 go build -o dist/hq-windows-amd64.exe ./cmd/hq
@@ -28,12 +31,12 @@ sentinel_bin="$work/sentinel-bin"
 mkdir -p "$sentinel_bin"
 
 for tool in herdr codex claude sh pwsh powershell; do
-	cat >"$sentinel_bin/$tool" <<'EOF'
+  cat >"$sentinel_bin/$tool" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$0" >>"${HQ_EXEC_SENTINEL:?}"
 exit 97
 EOF
-	chmod +x "$sentinel_bin/$tool"
+  chmod +x "$sentinel_bin/$tool"
 done
 
 original_path=$PATH

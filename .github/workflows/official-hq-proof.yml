@@ -32,13 +32,15 @@ jobs:
           grep -F '"tabProofB"' artifacts/official-hq-interactive-tab-proof-linux.txt
           grep -F '"tabProofC"' artifacts/official-hq-interactive-tab-proof-linux.txt
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: hq-official-proof-linux
           path: |
+            artifacts/go-test.log
             artifacts/hq-linux-amd64
             artifacts/official-hq-interactive-tab-proof-linux.txt
             artifacts/vim-hq-contract-proof-linux.json
-          if-no-files-found: error
+          if-no-files-found: warn
 
   windows-official-hq-proof:
     runs-on: windows-latest

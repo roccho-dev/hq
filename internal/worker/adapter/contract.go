@@ -1,5 +1,3 @@
-// Package adapter defines the transient boundary between worker core and
-// target-specific executors. It defines no durable event row.
 package adapter
 
 import (
@@ -10,32 +8,23 @@ import (
 	"strings"
 )
 
-// Adapter executes one already-validated request. It may stream transient
-// Output values and return one transient Completion or an error.
 type Adapter interface {
 	Run(context.Context, Request, Emit) (Completion, error)
 }
-
 type Emit func(Output) error
-
 type Request struct {
-	RunID         string
-	InstructionID string
-	Target        string
-	Operation     string
-	Payload       json.RawMessage
-	CWD           string
+	RunID          string
+	InstructionID  string
+	Target         string
+	Operation      string
+	Payload        json.RawMessage
+	CWD            string
+	IdempotencyKey string
 }
 
-var canonicalTargets = map[string]struct{}{
-	"sh": {}, "herdr": {}, "codex": {}, "claude": {},
-}
+var canonicalTargets = map[string]struct{}{"sh": {}, "herdr": {}, "codex": {}, "claude": {}, "host": {}}
 
-func IsCanonicalTarget(target string) bool {
-	_, ok := canonicalTargets[target]
-	return ok
-}
-
+func IsCanonicalTarget(t string) bool { _, ok := canonicalTargets[t]; return ok }
 func (r Request) Validate() error {
 	if strings.TrimSpace(r.RunID) == "" {
 		return errors.New("run_id is required")
@@ -55,6 +44,28 @@ func (r Request) Validate() error {
 	return nil
 }
 
+type ProviderDescriptor struct {
+	CapabilityID        string `json:"capability_id"`
+	ProviderID          string `json:"provider_id"`
+	ContractVersion     string `json:"contract_version"`
+	DeploymentID        string `json:"deployment_id"`
+	ProviderKind        string `json:"provider_kind"`
+	IntegrityDigest     string `json:"integrity_digest"`
+	IdempotencyContract string `json:"idempotency_contract,omitempty"`
+}
+
+func (d ProviderDescriptor) Validate() error {
+	for f, v := range map[string]string{"capability_id": d.CapabilityID, "provider_id": d.ProviderID, "contract_version": d.ContractVersion, "deployment_id": d.DeploymentID, "provider_kind": d.ProviderKind, "integrity_digest": d.IntegrityDigest} {
+		if strings.TrimSpace(v) == "" {
+			return fmt.Errorf("%s is required", f)
+		}
+	}
+	return nil
+}
+func (d ProviderDescriptor) Equal(o ProviderDescriptor) bool {
+	return d.CapabilityID == o.CapabilityID && d.ProviderID == o.ProviderID && d.ContractVersion == o.ContractVersion && d.DeploymentID == o.DeploymentID && d.ProviderKind == o.ProviderKind && d.IntegrityDigest == o.IntegrityDigest && d.IdempotencyContract == o.IdempotencyContract
+}
+
 type OutputKind string
 
 const (
@@ -62,8 +73,6 @@ const (
 	OutputStderr OutputKind = "stderr"
 )
 
-// Output is transient stream data. Identity, ordering, time, lifecycle kind,
-// and status are deliberately absent and therefore cannot be forged by an adapter.
 type Output struct {
 	Kind            OutputKind
 	Message         string
@@ -77,8 +86,6 @@ func (o Output) Validate() error {
 	return validateNativeSessionID(o.NativeSessionID)
 }
 
-// Completion is transient terminal data. A successful completion must carry a
-// final text and/or path so result.v1 cannot claim success with no answer.
 type Completion struct {
 	FinalText       string
 	FinalPath       string
@@ -91,9 +98,8 @@ func (c Completion) Validate() error {
 	}
 	return validateNativeSessionID(c.NativeSessionID)
 }
-
-func validateNativeSessionID(value *string) error {
-	if value != nil && strings.TrimSpace(*value) == "" {
+func validateNativeSessionID(v *string) error {
+	if v != nil && strings.TrimSpace(*v) == "" {
 		return errors.New("native_session_id cannot be empty")
 	}
 	return nil

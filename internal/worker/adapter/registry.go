@@ -11,63 +11,78 @@ import (
 const RegistryVersion = "adapter.registry.v1"
 
 type Registration struct {
-	Target  string
-	Adapter Adapter
+	Target   string
+	Adapter  Adapter
+	Provider *ProviderDescriptor
 }
-
 type Registry struct {
-	adapters map[string]Adapter
-	targets  []string
+	registrations map[string]Registration
+	targets       []string
 }
 
-func NewRegistry(registrations ...Registration) (*Registry, error) {
-	adapters := make(map[string]Adapter, len(registrations))
-	for _, registration := range registrations {
-		if !IsCanonicalTarget(registration.Target) {
-			return nil, fmt.Errorf("target %q is not part of instruction.v1", registration.Target)
+func NewRegistry(rs ...Registration) (*Registry, error) {
+	entries := map[string]Registration{}
+	for _, r := range rs {
+		if !IsCanonicalTarget(r.Target) {
+			return nil, fmt.Errorf("target %q is not part of instruction.v1", r.Target)
 		}
-		if isNilAdapter(registration.Adapter) {
-			return nil, fmt.Errorf("adapter for target %q is nil", registration.Target)
+		if isNilAdapter(r.Adapter) {
+			return nil, fmt.Errorf("adapter for target %q is nil", r.Target)
 		}
-		if _, exists := adapters[registration.Target]; exists {
-			return nil, fmt.Errorf("adapter target %q is registered twice", registration.Target)
+		if _, ok := entries[r.Target]; ok {
+			return nil, fmt.Errorf("adapter target %q is registered twice", r.Target)
 		}
-		adapters[registration.Target] = registration.Adapter
+		if r.Provider != nil {
+			if err := r.Provider.Validate(); err != nil {
+				return nil, fmt.Errorf("provider for target %q: %w", r.Target, err)
+			}
+			copy := *r.Provider
+			r.Provider = &copy
+		}
+		entries[r.Target] = r
 	}
-	targets := make([]string, 0, len(adapters))
-	for target := range adapters {
-		targets = append(targets, target)
+	targets := make([]string, 0, len(entries))
+	for t := range entries {
+		targets = append(targets, t)
 	}
 	sort.Strings(targets)
-	return &Registry{adapters: adapters, targets: targets}, nil
+	return &Registry{entries, targets}, nil
 }
-
-func (r *Registry) Resolve(target string) (Adapter, error) {
+func (r *Registry) Resolve(t string) (Adapter, error) {
+	x, err := r.ResolveRegistration(t)
+	if err != nil {
+		return nil, err
+	}
+	return x.Adapter, nil
+}
+func (r *Registry) ResolveRegistration(t string) (Registration, error) {
 	if r == nil {
-		return nil, errors.New("adapter registry is nil")
+		return Registration{}, errors.New("adapter registry is nil")
 	}
-	if !IsCanonicalTarget(target) {
-		return nil, &UnknownTargetError{Target: target}
+	if !IsCanonicalTarget(t) {
+		return Registration{}, &UnknownTargetError{t}
 	}
-	resolved, ok := r.adapters[target]
+	x, ok := r.registrations[t]
 	if !ok {
-		return nil, &AdapterUnavailableError{Target: target}
+		return Registration{}, &AdapterUnavailableError{t}
 	}
-	return resolved, nil
+	if x.Provider != nil {
+		copy := *x.Provider
+		x.Provider = &copy
+	}
+	return x, nil
 }
-
 func (r *Registry) Snapshot() RegistrySnapshot {
 	if r == nil {
-		return RegistrySnapshot{Version: RegistryVersion, Targets: []string{}}
+		return RegistrySnapshot{RegistryVersion, []string{}}
 	}
-	return RegistrySnapshot{Version: RegistryVersion, Targets: append([]string(nil), r.targets...)}
+	return RegistrySnapshot{RegistryVersion, append([]string(nil), r.targets...)}
 }
 
 type RegistrySnapshot struct {
 	Version string   `json:"version"`
 	Targets []string `json:"targets"`
 }
-
 type UnknownTargetError struct{ Target string }
 
 func (e *UnknownTargetError) Error() string {
@@ -87,8 +102,6 @@ const (
 	FailureBlocked FailureClass = "blocked"
 )
 
-// FailureError lets an adapter return a stable transient failure without
-// owning the durable result.v1 envelope or lifecycle identity.
 type FailureError struct {
 	Class     FailureClass
 	Code      string
@@ -97,7 +110,6 @@ type FailureError struct {
 }
 
 func (e *FailureError) Error() string { return e.Message }
-
 func (e *FailureError) Validate() error {
 	if e == nil {
 		return errors.New("failure is nil")
@@ -110,22 +122,20 @@ func (e *FailureError) Validate() error {
 	}
 	return nil
 }
-
-func NewBlockedError(code, message string) error {
-	if strings.TrimSpace(code) == "" {
-		code = "policy_blocked"
+func NewBlockedError(c, m string) error {
+	if strings.TrimSpace(c) == "" {
+		c = "policy_blocked"
 	}
-	return &FailureError{Class: FailureBlocked, Code: code, Message: message}
+	return &FailureError{Class: FailureBlocked, Code: c, Message: m}
 }
-
-func isNilAdapter(candidate Adapter) bool {
-	if candidate == nil {
+func isNilAdapter(a Adapter) bool {
+	if a == nil {
 		return true
 	}
-	value := reflect.ValueOf(candidate)
-	switch value.Kind() {
+	v := reflect.ValueOf(a)
+	switch v.Kind() {
 	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return value.IsNil()
+		return v.IsNil()
 	default:
 		return false
 	}
