@@ -15,7 +15,7 @@ type Contract struct {
 }
 
 func DefaultContract() Contract {
-	return Contract{Version: InstructionVersionV1, Targets: map[string]struct{}{"sh": {}, "herdr": {}, "codex": {}, "claude": {}, "host": {}}}
+	return Contract{Version: InstructionVersionV1, Targets: map[string]struct{}{"sh": {}, "herdr": {}, "codex": {}, "claude": {}, "host": {}, "local-tool": {}}}
 }
 
 func (c Contract) Validate(row ReadRow) []Diagnostic {
@@ -34,7 +34,7 @@ func (c Contract) Validate(row ReadRow) []Diagnostic {
 		out = append(out, invalid("unknown_op", "op", "op must be run in instruction.v1"))
 	}
 	if _, ok := c.Targets[inst.Target]; !ok {
-		out = append(out, invalid("unknown_target", "target", "target must be sh, herdr, codex, claude, or host"))
+		out = append(out, invalid("unknown_target", "target", "target must be sh, herdr, codex, claude, host, or local-tool"))
 	}
 	if !isRFC3339UTC(inst.CreatedAt) {
 		out = append(out, invalid("invalid_created_at", "created_at", "created_at must be RFC3339 UTC ending in Z"))
@@ -97,6 +97,8 @@ func validatePayload(target string, raw json.RawMessage) []Diagnostic {
 		return validateAgentPayload(target, payload)
 	case "host":
 		return validateHostPayload(payload)
+	case "local-tool":
+		return validateLocalToolPayload(payload)
 	case "sh":
 	default:
 		return nil
@@ -121,6 +123,26 @@ func validatePayload(target string, raw json.RawMessage) []Diagnostic {
 		if json.Unmarshal(rawCWD, &cwd) != nil || strings.TrimSpace(cwd) == "" {
 			return []Diagnostic{invalid("invalid_payload", "payload.cwd", "cwd must be a non-empty string")}
 		}
+	}
+	return nil
+}
+
+func validateLocalToolPayload(payload map[string]json.RawMessage) []Diagnostic {
+	allowed := map[string]struct{}{"tool_id": {}, "tool_version": {}, "action_id": {}, "input": {}}
+	for key := range payload {
+		if _, ok := allowed[key]; !ok {
+			return []Diagnostic{invalid("invalid_payload", "payload."+key, "unsupported local-tool payload field")}
+		}
+	}
+	for _, field := range []string{"tool_id", "tool_version", "action_id"} {
+		var value string
+		if json.Unmarshal(payload[field], &value) != nil || strings.TrimSpace(value) == "" {
+			return []Diagnostic{invalid("invalid_payload", "payload."+field, field+" must be a non-empty string")}
+		}
+	}
+	var input map[string]json.RawMessage
+	if json.Unmarshal(payload["input"], &input) != nil || input == nil {
+		return []Diagnostic{invalid("invalid_payload", "payload.input", "input must be a JSON object")}
 	}
 	return nil
 }

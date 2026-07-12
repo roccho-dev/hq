@@ -126,8 +126,12 @@ func (r Runner) Process(ctx context.Context, rows []ReadRow, prior LogData, repl
 		}
 		registration, resolveErr := r.Registry.ResolveRegistration(row.Instruction.Target)
 		request := adapter.Request{RunID: runID, InstructionID: row.Instruction.ID, Target: row.Instruction.Target, Operation: row.Instruction.Op, Payload: row.Instruction.Payload, CWD: base.EffectiveCWD}
+		prepared := adapter.Prepared{}
+		if resolveErr == nil {
+			prepared, resolveErr = registration.Prepare(ctx, request)
+		}
 		if recovering {
-			if resolveErr != nil || registration.Provider == nil || !providerMatches(*priorProvider, *registration.Provider) {
+			if resolveErr != nil || prepared.Provider == nil || !providerMatches(*priorProvider, *prepared.Provider) {
 				if err := appendEntry(ResultEntry(reconcileResult(runID, row.Instruction, seq, clock(), "verified idempotent provider binding is unavailable or changed"))); err != nil {
 					return emitted, unsuccessful, err
 				}
@@ -135,7 +139,7 @@ func (r Runner) Process(ctx context.Context, rows []ReadRow, prior LogData, repl
 				continue
 			}
 			request.IdempotencyKey = priorProvider.IdempotencyKey
-		} else if resolveErr == nil && registration.Provider != nil && registration.Provider.IdempotencyContract != "" {
+		} else if resolveErr == nil && prepared.Provider != nil && prepared.Provider.IdempotencyContract != "" {
 			request.IdempotencyKey = "hq-idem-" + runID
 		}
 		if resolveErr != nil {
@@ -151,8 +155,8 @@ func (r Runner) Process(ctx context.Context, rows []ReadRow, prior LogData, repl
 		}
 		if !recovering {
 			started := ResultRow{EventID: makeEventID(runID, seq), Version: ResultVersionV1, RunID: runID, InstructionID: row.Instruction.ID, Target: row.Instruction.Target, Kind: ResultStarted, Seq: seq, RecordedAt: clock()}
-			if registration.Provider != nil {
-				started.Provider = providerEvidence(*registration.Provider, request.IdempotencyKey)
+			if prepared.Provider != nil {
+				started.Provider = providerEvidence(*prepared.Provider, request.IdempotencyKey)
 			}
 			if err := appendEntry(ResultEntry(started)); err != nil {
 				return emitted, unsuccessful, err
@@ -165,7 +169,7 @@ func (r Runner) Process(ctx context.Context, rows []ReadRow, prior LogData, repl
 			runCtx, cancel = context.WithTimeout(ctx, time.Duration(base.TimeoutSeconds)*time.Second)
 		}
 		emitErr := error(nil)
-		completion, adapterErr := registration.Adapter.Run(runCtx, request, func(output adapter.Output) error {
+		completion, adapterErr := prepared.Adapter.Run(runCtx, request, func(output adapter.Output) error {
 			result, err := ResultForAdapterOutput(request, AdapterEnvelope{EventID: makeEventID(runID, seq), Seq: seq, RecordedAt: clock()}, output)
 			if err != nil {
 				emitErr = err

@@ -121,6 +121,10 @@ func TestServeAutomaticallyProcessesAcceptedHostIntentWithExactProvider(t *testi
 		t.Fatalf("provider was not invoked: %v", err)
 	}
 	health := HealthCheck(profile, time.Now())
+	for deadline := time.Now().Add(2 * time.Second); !health.Ready && time.Now().Before(deadline); {
+		time.Sleep(20 * time.Millisecond)
+		health = HealthCheck(profile, time.Now())
+	}
 	if !health.Ready || health.State != StateReady {
 		cancel()
 		t.Fatalf("health=%+v", health)

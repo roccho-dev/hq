@@ -5,13 +5,17 @@ package workerservice
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"sort"
 	"time"
 
+	"hq/internal/adapter/current"
 	"hq/internal/capability"
+	"hq/internal/core"
 	"hq/internal/hqprofile"
+	"hq/internal/localtool"
 	"hq/internal/worker"
 	"hq/internal/worker/adapter"
 	"hq/internal/worker/hostopen"
@@ -176,16 +180,69 @@ func processOnce(ctx context.Context, profile hqprofile.Profile) (string, error)
 }
 
 func loadRegistry(profile hqprofile.Profile) (*adapter.Registry, error) {
-	binding, err := capability.Load(profile.CapabilitiesPath, profile.DeploymentID, capability.HostOpenCapability)
+	if profile.WorldPath == "" {
+		return hostRegistry(profile)
+	}
+	worldFile, err := os.Open(profile.WorldPath)
 	if err != nil {
 		return nil, err
+	}
+	world, loadErr := current.LoadSchemaJSONL(worldFile)
+	closeErr := worldFile.Close()
+	if loadErr != nil {
+		return nil, loadErr
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	registrations := []adapter.Registration{}
+	if worldSelectsTarget(world, "host") {
+		if profile.CapabilitiesPath == "" {
+			return nil, errors.New("selected world declares host commands but profile has no capabilities_path")
+		}
+		host, err := hostRegistration(profile)
+		if err != nil {
+			return nil, err
+		}
+		registrations = append(registrations, host)
+	}
+	if len(world.LocalTools) != 0 {
+		if profile.ExecutableBindingsPath == "" {
+			return nil, errors.New("selected world declares local tools but profile has no executable_bindings_path")
+		}
+		registrations = append(registrations, adapter.Registration{Target: "local-tool", Preparer: localtool.Preparer{World: world, BindingsPath: profile.ExecutableBindingsPath}})
+	}
+	return adapter.NewRegistry(registrations...)
+}
+
+func hostRegistry(profile hqprofile.Profile) (*adapter.Registry, error) {
+	host, err := hostRegistration(profile)
+	if err != nil {
+		return nil, err
+	}
+	return adapter.NewRegistry(host)
+}
+
+func hostRegistration(profile hqprofile.Profile) (adapter.Registration, error) {
+	binding, err := capability.Load(profile.CapabilitiesPath, profile.DeploymentID, capability.HostOpenCapability)
+	if err != nil {
+		return adapter.Registration{}, err
 	}
 	hostAdapter, err := hostopen.New(binding)
 	if err != nil {
-		return nil, err
+		return adapter.Registration{}, err
 	}
 	descriptor := adapter.ProviderDescriptor{CapabilityID: binding.CapabilityID, ProviderID: binding.ProviderID, ContractVersion: binding.ContractVersion, DeploymentID: binding.DeploymentID, ProviderKind: binding.ProviderKind, IntegrityDigest: binding.IntegrityDigest, IdempotencyContract: binding.IdempotencyContract}
-	return adapter.NewRegistry(adapter.Registration{Target: "host", Adapter: hostAdapter, Provider: &descriptor})
+	return adapter.Registration{Target: "host", Adapter: hostAdapter, Provider: &descriptor}, nil
+}
+
+func worldSelectsTarget(world *core.JsonlWorld, target string) bool {
+	for _, command := range world.Commands {
+		if value, ok := command.Instruction["target"].(string); ok && value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func pendingRows(rows []worker.ReadRow, prior worker.LogData) []worker.ReadRow {
