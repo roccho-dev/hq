@@ -1,13 +1,16 @@
 package workerservice
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
 	"hq/internal/adapter/current"
 	"hq/internal/core"
 	"hq/internal/hqprofile"
+	"hq/internal/localtool"
 	"hq/internal/worker"
+	"hq/internal/worker/adapter"
 )
 
 func loadProfileWorld(profile hqprofile.Profile) (*core.JsonlWorld, error) {
@@ -20,6 +23,33 @@ func loadProfileWorld(profile hqprofile.Profile) (*core.JsonlWorld, error) {
 	}
 	defer file.Close()
 	return current.LoadRuntimeWorldJSONL(file)
+}
+
+// loadRegistryForWorld builds adapters from the exact in-memory world snapshot
+// already used for provenance validation. This removes a profile-replacement
+// race between validation and provider preparation.
+func loadRegistryForWorld(profile hqprofile.Profile, world *core.JsonlWorld) (*adapter.Registry, error) {
+	if world == nil {
+		return hostRegistry(profile)
+	}
+	registrations := []adapter.Registration{}
+	if worldSelectsTarget(world, "host") {
+		if profile.CapabilitiesPath == "" {
+			return nil, errors.New("selected world declares host commands but profile has no capabilities_path")
+		}
+		host, err := hostRegistration(profile)
+		if err != nil {
+			return nil, err
+		}
+		registrations = append(registrations, host)
+	}
+	if len(world.LocalTools) != 0 {
+		if profile.ExecutableBindingsPath == "" {
+			return nil, errors.New("selected world declares local tools but profile has no executable_bindings_path")
+		}
+		registrations = append(registrations, adapter.Registration{Target: "local-tool", Preparer: localtool.Preparer{World: world, BindingsPath: profile.ExecutableBindingsPath}})
+	}
+	return adapter.NewRegistry(registrations...)
 }
 
 // validateSelectedWorldRows converts provenance mismatch into the normal typed
