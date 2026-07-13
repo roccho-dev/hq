@@ -112,6 +112,21 @@ func TestClaimDisappearanceWithoutWorkerAcknowledgementIsNonGreen(t *testing.T) 
 	}
 }
 
+func TestAcknowledgeRejectsLingeringHeartbeat(t *testing.T) {
+	profile, claim := claimedControlProfile(t)
+	request, err := RequestStop(profile, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := claim.Release(); err != nil {
+		t.Fatal(err)
+	}
+	defer workerclaim.RemoveHeartbeat(profile.WorkspaceRoot)
+	if _, err := AcknowledgeStop(profile, request, time.Now()); err == nil {
+		t.Fatal("graceful-stop acknowledgement accepted a lingering heartbeat")
+	}
+}
+
 func TestStopControlDoesNotCancelWithoutRequest(t *testing.T) {
 	profile, claim := claimedControlProfile(t)
 	defer claim.Release()
