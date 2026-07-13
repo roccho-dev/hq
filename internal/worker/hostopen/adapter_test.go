@@ -130,20 +130,14 @@ func TestRunCompletesAfterSuccessfulReleaseAndHandoff(t *testing.T) {
 		t.Fatalf("completion=%+v", got.completion)
 	}
 
-	markerBytes := waitReadFile(t, marker, 2*time.Second)
-	var args []string
-	if err := json.Unmarshal(markerBytes, &args); err != nil {
-		t.Fatal(err)
-	}
+	args := waitReadJSONStrings(t, marker, 2*time.Second)
 	if want := []string{cleanPath}; !reflect.DeepEqual(args, want) {
 		t.Fatalf("provider args=%q want=%q", args, want)
 	}
 	if err := os.WriteFile(cleanup, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got := string(waitReadFile(t, done, 2*time.Second)); got != "exiting-23" {
-		t.Fatalf("helper completion=%q", got)
-	}
+	waitReadExactText(t, done, "exiting-23", 2*time.Second)
 	waitRemoveFile(t, helperExecutable, 2*time.Second)
 }
 
@@ -230,21 +224,40 @@ func copyTestExecutable(t *testing.T, root string) string {
 	return destination
 }
 
-func waitReadFile(t *testing.T, path string, timeout time.Duration) []byte {
+func waitReadJSONStrings(t *testing.T, path string, timeout time.Duration) []string {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		data, err := os.ReadFile(path)
 		if err == nil {
-			return data
-		}
-		if !errors.Is(err, os.ErrNotExist) {
+			var values []string
+			if json.Unmarshal(data, &values) == nil {
+				return values
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
 			t.Fatal(err)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("timed out waiting for %s", path)
+	t.Fatalf("timed out waiting for complete JSON in %s", path)
 	return nil
+}
+
+func waitReadExactText(t *testing.T, path, expected string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			if string(data) == expected {
+				return
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %q in %s", expected, path)
 }
 
 func waitRemoveFile(t *testing.T, path string, timeout time.Duration) {
