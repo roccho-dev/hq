@@ -11,6 +11,7 @@ import (
 	"io"
 	"strings"
 
+	"hq/internal/core"
 	"hq/internal/worker"
 )
 
@@ -21,12 +22,13 @@ const (
 )
 
 type envelope struct {
-	Kind        string          `json:"kind"`
-	Queue       string          `json:"queue"`
-	Key         string          `json:"key,omitempty"`
-	Value       json.RawMessage `json:"value,omitempty"`
-	Instruction json.RawMessage `json:"instruction"`
-	Reason      string          `json:"reason,omitempty"`
+	Kind        string                  `json:"kind"`
+	Queue       string                  `json:"queue"`
+	Key         string                  `json:"key,omitempty"`
+	Value       json.RawMessage         `json:"value,omitempty"`
+	Instruction json.RawMessage         `json:"instruction"`
+	Reason      string                  `json:"reason,omitempty"`
+	Provenance  *core.CompileProvenance `json:"provenance,omitempty"`
 }
 
 // Read converts every non-empty accepted.instruction JSONL row into one
@@ -45,7 +47,7 @@ func Read(path string, r io.Reader) ([]worker.ReadRow, error) {
 			continue
 		}
 		source := worker.SourceRef{Path: path, Line: line, Raw: raw}
-		instruction, diagnostic := decodeLine([]byte(raw))
+		instruction, provenance, diagnostic := decodeLine([]byte(raw))
 		if diagnostic != nil {
 			rows = append(rows, worker.ReadRow{Source: source, ParseError: diagnostic})
 			continue
@@ -61,6 +63,7 @@ func Read(path string, r io.Reader) ([]worker.ReadRow, error) {
 			continue
 		}
 		parsed[0].Source = source
+		parsed[0].Provenance = provenance
 		rows = append(rows, parsed[0])
 	}
 	if err := scanner.Err(); err != nil {
@@ -69,29 +72,44 @@ func Read(path string, r io.Reader) ([]worker.ReadRow, error) {
 	return rows, nil
 }
 
-func decodeLine(raw []byte) (json.RawMessage, *worker.Diagnostic) {
+func decodeLine(raw []byte) (json.RawMessage, *core.CompileProvenance, *worker.Diagnostic) {
 	var candidate envelope
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&candidate); err != nil {
-		return nil, &worker.Diagnostic{Code: "malformed_json", Message: err.Error()}
+		return nil, nil, &worker.Diagnostic{Code: "malformed_json", Message: err.Error()}
 	}
 	var extra any
 	if err := decoder.Decode(&extra); err != io.EOF {
 		if err == nil {
 			err = errors.New("multiple JSON values in accepted envelope")
 		}
-		return nil, &worker.Diagnostic{Code: "malformed_json", Message: err.Error()}
+		return nil, nil, &worker.Diagnostic{Code: "malformed_json", Message: err.Error()}
 	}
 	if candidate.Kind != AcceptedKind {
-		return nil, &worker.Diagnostic{Code: "invalid_accepted_envelope", Field: "kind", Message: "kind must be accepted.instruction"}
+		return nil, nil, &worker.Diagnostic{Code: "invalid_accepted_envelope", Field: "kind", Message: "kind must be accepted.instruction"}
 	}
 	if candidate.Queue != AcceptedQueue {
-		return nil, &worker.Diagnostic{Code: "invalid_accepted_envelope", Field: "queue", Message: "queue must be instruction.jsonl"}
+		return nil, nil, &worker.Diagnostic{Code: "invalid_accepted_envelope", Field: "queue", Message: "queue must be instruction.jsonl"}
 	}
 	trimmed := bytes.TrimSpace(candidate.Instruction)
 	if len(trimmed) == 0 || trimmed[0] != '{' || trimmed[len(trimmed)-1] != '}' {
-		return nil, &worker.Diagnostic{Code: "invalid_accepted_envelope", Field: "instruction", Message: "instruction must be one JSON object"}
+		return nil, nil, &worker.Diagnostic{Code: "invalid_accepted_envelope", Field: "instruction", Message: "instruction must be one JSON object"}
 	}
-	return append(json.RawMessage(nil), trimmed...), nil
+	if candidate.Provenance != nil {
+		if err := candidate.Provenance.Validate(); err != nil {
+			return nil, nil, &worker.Diagnostic{Code: "invalid_compile_provenance", Field: "provenance", Message: err.Error()}
+		}
+		var instructionValue any
+		if err := json.Unmarshal(trimmed, &instructionValue); err != nil {
+			return nil, nil, &worker.Diagnostic{Code: "invalid_accepted_envelope", Field: "instruction", Message: err.Error()}
+		}
+		digest, err := core.CanonicalDigest(instructionValue)
+		if err != nil || digest != candidate.Provenance.InstructionDigest {
+			return nil, nil, &worker.Diagnostic{Code: "compile_provenance_mismatch", Field: "provenance.instruction_digest", Message: "compile provenance does not bind the accepted instruction"}
+		}
+		copy := *candidate.Provenance
+		candidate.Provenance = &copy
+	}
+	return append(json.RawMessage(nil), trimmed...), candidate.Provenance, nil
 }
