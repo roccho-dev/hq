@@ -1,6 +1,7 @@
 package hq
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -39,6 +40,30 @@ func TestCommandWorldDataAloneExpandsCompletion(t *testing.T) {
 	values := Complete(valuesBuffer, len(valuesBuffer), expanded)
 	if !hasSuggestion(values, "screen") {
 		t.Fatalf("enum suggestions=%#v", values)
+	}
+}
+
+func TestLocalToolCommandLowersSemanticIdentityWithoutProviderData(t *testing.T) {
+	tool := `{"kind":"hq.local-tool.v1","tool_id":"dummy","tool_version":"1","binding_ref":"local-tool.dummy","binding_contract_version":"1","actions":[{"action_id":"echo","inputs":[{"name":"value","type":"string","required":true}],"argv":[{"literal":"echo"},{"field":"value"}],"stdin":{"mode":"none","max_bytes":0},"limits":{"timeout_ms":1000,"stdout_bytes":1024,"stderr_bytes":1024},"output":{"format":"text"},"lifecycle":"one-shot","risk":"low","approval":"explicit"}]}`
+	command := `{"kind":"hq.command.v1","name":"dummy.echo","instruction":{"version":"instruction.v1","op":"run","target":"local-tool","payload":{"tool_id":"dummy","tool_version":"1","action_id":"echo","input":{}}},"fields":[{"name":"value","type":"string","required":true,"bind":"payload.input.value"}]}`
+	world, err := LoadSchemaJSONL(strings.NewReader(tool + "\n" + command))
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft, err := CompileCommandObject("@dummy.echo\nvalue=\";&|$()\"", 1, world)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := draft.Instruction["payload"].(map[string]any)
+	input := payload["input"].(map[string]any)
+	if draft.Instruction["target"] != "local-tool" || payload["tool_id"] != "dummy" || payload["tool_version"] != "1" || payload["action_id"] != "echo" || input["value"] != `;&|$()` {
+		t.Fatalf("instruction=%#v", draft.Instruction)
+	}
+	encoded, _ := json.Marshal(draft.Instruction)
+	for _, forbidden := range []string{"binding_ref", "executable", "materialDigest", `"argv"`} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("provider/runtime data leaked into instruction: %s", encoded)
+		}
 	}
 }
 

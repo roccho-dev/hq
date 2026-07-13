@@ -1,14 +1,11 @@
 package agentadapter
 
 import (
-	"bytes"
 	"context"
-	"io"
-	"os/exec"
-	"path/filepath"
-	"strings"
+	"errors"
 
 	"hq/internal/worker/adapter"
+	"hq/internal/worker/directexec"
 )
 
 // DirectOSRunner executes an already-validated explicit path without a shell,
@@ -18,28 +15,15 @@ import (
 type DirectOSRunner struct{}
 
 func (DirectOSRunner) Run(ctx context.Context, command Command) (CommandResult, error) {
-	path := strings.TrimSpace(command.Path)
-	if path == "" || (!filepath.IsAbs(path) && !strings.ContainsAny(path, `/\`)) {
-		return CommandResult{}, &adapter.FailureError{
-			Class: adapter.FailureBlocked, Code: "executable_path_required",
-			Message: "sh argv[0] must be an absolute or explicit relative path; PATH lookup is forbidden",
+	result, err := (directexec.Runner{}).Run(ctx, directexec.Command{
+		Path: command.Path, Args: command.Args, Dir: command.Dir, Stdin: command.Stdin,
+		Env: []string{},
+	})
+	var directError *directexec.Error
+	if errors.As(err, &directError) {
+		return CommandResult{Stdout: result.Stdout, Stderr: result.Stderr}, &adapter.FailureError{
+			Class: adapter.FailureBlocked, Code: directError.Code, Message: directError.Message,
 		}
 	}
-	if !filepath.IsAbs(path) {
-		path = filepath.Clean(filepath.Join(command.Dir, path))
-	}
-	cmd := exec.CommandContext(ctx, path, command.Args...)
-	cmd.Dir = command.Dir
-	cmd.Env = []string{}
-	if len(command.Stdin) != 0 {
-		cmd.Stdin = bytes.NewReader(command.Stdin)
-	}
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = io.Writer(&stdout)
-	cmd.Stderr = io.Writer(&stderr)
-	err := cmd.Run()
-	if contextErr := ctx.Err(); contextErr != nil {
-		err = contextErr
-	}
-	return CommandResult{Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}, err
+	return CommandResult{Stdout: result.Stdout, Stderr: result.Stderr}, err
 }

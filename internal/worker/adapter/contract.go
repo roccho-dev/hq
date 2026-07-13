@@ -11,6 +11,27 @@ import (
 type Adapter interface {
 	Run(context.Context, Request, Emit) (Completion, error)
 }
+
+// Preparer resolves a request-specific provider without starting it. This is
+// the only dynamic step permitted before the worker records durable started
+// evidence.
+type Preparer interface {
+	Prepare(context.Context, Request) (Prepared, error)
+}
+
+type PreparerFunc func(context.Context, Request) (Prepared, error)
+
+func (f PreparerFunc) Prepare(ctx context.Context, request Request) (Prepared, error) {
+	return f(ctx, request)
+}
+
+// Prepared binds the exact transient adapter and verified provider selected
+// for one request. Provider may be nil only for legacy/static registrations.
+type Prepared struct {
+	Adapter  Adapter
+	Provider *ProviderDescriptor
+}
+
 type Emit func(Output) error
 type Request struct {
 	RunID          string
@@ -22,7 +43,7 @@ type Request struct {
 	IdempotencyKey string
 }
 
-var canonicalTargets = map[string]struct{}{"sh": {}, "herdr": {}, "codex": {}, "claude": {}, "host": {}}
+var canonicalTargets = map[string]struct{}{"sh": {}, "herdr": {}, "codex": {}, "claude": {}, "host": {}, "local-tool": {}}
 
 func IsCanonicalTarget(t string) bool { _, ok := canonicalTargets[t]; return ok }
 func (r Request) Validate() error {

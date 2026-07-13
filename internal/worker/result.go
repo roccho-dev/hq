@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-var canonicalTargets = map[string]struct{}{"sh": {}, "herdr": {}, "codex": {}, "claude": {}, "host": {}}
+var canonicalTargets = map[string]struct{}{"sh": {}, "herdr": {}, "codex": {}, "claude": {}, "host": {}, "local-tool": {}}
 
 func (r ResultRow) Validate() error {
 	if strings.TrimSpace(r.EventID) == "" {

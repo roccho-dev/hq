@@ -114,6 +114,43 @@ func TestRunnerComposesApprovalDispatchRedactionAndProjection(t *testing.T) {
 	}
 }
 
+func TestRunnerRecordsDynamicallyPreparedProviderBeforeDispatch(t *testing.T) {
+	row := runnerRow(t, "plain")
+	fake := &runnerFakeAdapter{}
+	prepareCalls := 0
+	descriptor := adapter.ProviderDescriptor{
+		CapabilityID: "bin.test", ProviderID: "binding.test", ContractVersion: "local-tool.exec.v1",
+		DeploymentID: "dep-1", ProviderKind: "executable", IntegrityDigest: "sha256:" + strings.Repeat("a", 64),
+		IdempotencyContract: "local-tool.exec.idempotency.v1",
+	}
+	registry, err := adapter.NewRegistry(adapter.Registration{Target: "sh", Preparer: adapter.PreparerFunc(func(_ context.Context, request adapter.Request) (adapter.Prepared, error) {
+		prepareCalls++
+		if request.CWD == "" || request.IdempotencyKey != "" {
+			t.Fatalf("prepare request=%+v", request)
+		}
+		return adapter.Prepared{Adapter: fake, Provider: &descriptor}, nil
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := NewRunner(t.TempDir(), registry, approvedRunnerFixture(t, row.Instruction))
+	sink := &memoryAppender{}
+	emitted, unsuccessful, err := runner.Process(context.Background(), []ReadRow{row}, LogData{}, false, sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unsuccessful != 0 || prepareCalls != 1 || fake.calls != 1 {
+		t.Fatalf("unsuccessful=%d prepare=%d adapter=%d", unsuccessful, prepareCalls, fake.calls)
+	}
+	if len(emitted) != 5 || emitted[2].Result == nil || emitted[2].Result.Kind != ResultStarted || emitted[2].Result.Provider == nil {
+		t.Fatalf("emitted=%+v", emitted)
+	}
+	provider := emitted[2].Result.Provider
+	if provider.ProviderID != descriptor.ProviderID || provider.IntegrityDigest != descriptor.IntegrityDigest || provider.IdempotencyKey == "" {
+		t.Fatalf("provider=%+v", provider)
+	}
+}
+
 func TestRunnerMissingOrStaleApprovalNeverReachesAdapter(t *testing.T) {
 	row := runnerRow(t, "plain")
 	for _, test := range []struct {

@@ -18,16 +18,17 @@ import (
 const Kind = "hq.profile.v1"
 
 type Profile struct {
-	Kind             string `json:"kind"`
-	Name             string `json:"name"`
-	DeploymentID     string `json:"deployment_id"`
-	WorldPath        string `json:"world_path"`
-	AcceptedPath     string `json:"accepted_path"`
-	WorkspaceRoot    string `json:"workspace_root"`
-	EventsPath       string `json:"events_path"`
-	CapabilitiesPath string `json:"capabilities_path"`
-	PollIntervalMS   int    `json:"poll_interval_ms"`
-	HealthTimeoutMS  int    `json:"health_timeout_ms"`
+	Kind                   string `json:"kind"`
+	Name                   string `json:"name"`
+	DeploymentID           string `json:"deployment_id"`
+	WorldPath              string `json:"world_path"`
+	AcceptedPath           string `json:"accepted_path"`
+	WorkspaceRoot          string `json:"workspace_root"`
+	EventsPath             string `json:"events_path"`
+	CapabilitiesPath       string `json:"capabilities_path"`
+	ExecutableBindingsPath string `json:"executable_bindings_path,omitempty"`
+	PollIntervalMS         int    `json:"poll_interval_ms"`
+	HealthTimeoutMS        int    `json:"health_timeout_ms"`
 }
 
 func DefaultRoot() (string, error) {
@@ -102,10 +103,16 @@ func (p Profile) Validate() error {
 	if strings.TrimSpace(p.DeploymentID) == "" {
 		return errors.New("deployment_id is required")
 	}
-	for field, value := range map[string]string{"world_path": p.WorldPath, "accepted_path": p.AcceptedPath, "workspace_root": p.WorkspaceRoot, "events_path": p.EventsPath, "capabilities_path": p.CapabilitiesPath} {
+	for field, value := range map[string]string{"world_path": p.WorldPath, "accepted_path": p.AcceptedPath, "workspace_root": p.WorkspaceRoot, "events_path": p.EventsPath} {
 		if strings.TrimSpace(value) == "" || !filepath.IsAbs(value) {
 			return fmt.Errorf("%s must be a non-empty absolute path", field)
 		}
+	}
+	if p.CapabilitiesPath != "" && !filepath.IsAbs(p.CapabilitiesPath) {
+		return errors.New("capabilities_path must be absolute when present")
+	}
+	if p.ExecutableBindingsPath != "" && !filepath.IsAbs(p.ExecutableBindingsPath) {
+		return errors.New("executable_bindings_path must be absolute when present")
 	}
 	if p.PollIntervalMS < 20 || p.PollIntervalMS > 60000 {
 		return errors.New("poll_interval_ms must be between 20 and 60000")
@@ -116,9 +123,19 @@ func (p Profile) Validate() error {
 	if info, err := os.Stat(p.WorkspaceRoot); err != nil || !info.IsDir() {
 		return fmt.Errorf("workspace_root is not an existing directory: %s", p.WorkspaceRoot)
 	}
-	for field, path := range map[string]string{"world_path": p.WorldPath, "accepted_path": p.AcceptedPath, "capabilities_path": p.CapabilitiesPath} {
+	for field, path := range map[string]string{"world_path": p.WorldPath, "accepted_path": p.AcceptedPath} {
 		if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
 			return fmt.Errorf("%s is not an existing regular file: %s", field, path)
+		}
+	}
+	if p.CapabilitiesPath != "" {
+		if info, err := os.Stat(p.CapabilitiesPath); err != nil || !info.Mode().IsRegular() {
+			return fmt.Errorf("capabilities_path is not an existing regular file: %s", p.CapabilitiesPath)
+		}
+	}
+	if p.ExecutableBindingsPath != "" {
+		if info, err := os.Stat(p.ExecutableBindingsPath); err != nil || !info.Mode().IsRegular() {
+			return fmt.Errorf("executable_bindings_path is not an existing regular file: %s", p.ExecutableBindingsPath)
 		}
 	}
 	parent := filepath.Dir(p.EventsPath)
