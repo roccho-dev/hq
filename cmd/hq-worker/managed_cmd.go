@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -24,6 +25,8 @@ func init() {
 		code = runManagedServe(os.Args[2:])
 	case "health":
 		code = runManagedHealth(os.Args[2:])
+	case "stop":
+		code = runManagedStop(os.Args[2:])
 	case "recover":
 		code = runManagedRecover(os.Args[2:])
 	default:
@@ -68,11 +71,37 @@ func runManagedServe(args []string) int {
 	if id == "" {
 		id = defaultWorkerID()
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
-	if err := workerservice.Serve(ctx, profile, id, os.Stdout); err != nil {
-		writeWorkerClaimError(os.Stderr, err)
+	signalCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stopSignals()
+	ctx, stopControl, observations := workerservice.WithStopControl(signalCtx, profile)
+	defer stopControl()
+	serveErr := workerservice.Serve(ctx, profile, id, os.Stdout)
+	var observation workerservice.StopObservation
+	select {
+	case value, ok := <-observations:
+		if ok {
+			observation = value
+		}
+	default:
+	}
+	if serveErr != nil {
+		writeWorkerClaimError(os.Stderr, serveErr)
 		return 2
+	}
+	if observation.Err != nil {
+		writeCommandError(os.Stderr, "stop_control_invalid", observation.Err.Error())
+		return 2
+	}
+	if observation.Request != nil {
+		receipt, err := workerservice.AcknowledgeStop(profile, *observation.Request, time.Now())
+		if err != nil {
+			writeCommandError(os.Stderr, "stop_acknowledgement_failed", err.Error())
+			return 2
+		}
+		if err := worker.EncodeJSONLine(os.Stdout, receipt); err != nil {
+			writeCommandError(os.Stderr, "output_failed", err.Error())
+			return 1
+		}
 	}
 	return 0
 }
@@ -90,6 +119,47 @@ func runManagedHealth(args []string) int {
 	}
 	if !report.Ready {
 		return 2
+	}
+	return 0
+}
+
+func runManagedStop(args []string) int {
+	flags := flag.NewFlagSet("hq-worker stop", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	profileName := flags.String("profile", "", "installed hq profile name")
+	profileRoot := flags.String("profile-root", "", "absolute profile root override for tests/diagnostics")
+	timeout := flags.Duration("timeout", 30*time.Second, "maximum time to wait for worker acknowledgement and claim release")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 || *profileName == "" || *timeout <= 0 {
+		writeCommandError(os.Stderr, "invalid_arguments", "usage: hq-worker stop --profile <name> [--timeout <duration>]")
+		return 2
+	}
+	profile, err := hqprofile.Load(*profileName, *profileRoot)
+	if err != nil {
+		writeCommandError(os.Stderr, "profile_invalid", err.Error())
+		return 2
+	}
+	request, err := workerservice.RequestStop(profile, time.Now())
+	if err != nil {
+		writeCommandError(os.Stderr, "stop_request_failed", err.Error())
+		return 2
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+	defer cancel()
+	receipt, err := workerservice.WaitStopped(ctx, profile, request)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			writeCommandError(os.Stderr, "stop_timeout", err.Error())
+		} else {
+			writeCommandError(os.Stderr, "stop_failed", err.Error())
+		}
+		return 2
+	}
+	if err := worker.EncodeJSONLine(os.Stdout, receipt); err != nil {
+		writeCommandError(os.Stderr, "output_failed", err.Error())
+		return 1
 	}
 	return 0
 }
