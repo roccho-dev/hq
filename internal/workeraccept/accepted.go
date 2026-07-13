@@ -101,7 +101,9 @@ func decodeLine(raw []byte) (json.RawMessage, *core.CompileProvenance, *worker.D
 			return nil, nil, &worker.Diagnostic{Code: "invalid_compile_provenance", Field: "provenance", Message: err.Error()}
 		}
 		var instructionValue any
-		if err := json.Unmarshal(trimmed, &instructionValue); err != nil {
+		instructionDecoder := json.NewDecoder(bytes.NewReader(trimmed))
+		instructionDecoder.UseNumber()
+		if err := instructionDecoder.Decode(&instructionValue); err != nil {
 			return nil, nil, &worker.Diagnostic{Code: "invalid_accepted_envelope", Field: "instruction", Message: err.Error()}
 		}
 		digest, err := core.CanonicalDigest(instructionValue)
