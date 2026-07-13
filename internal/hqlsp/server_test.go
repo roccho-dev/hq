@@ -46,6 +46,40 @@ type completionWireItem struct {
 	Command json.RawMessage `json:"command"`
 }
 
+type submitResponse struct {
+	Result struct {
+		Kind             string            `json:"kind"`
+		Status           string            `json:"status"`
+		QueueID          string            `json:"queueId"`
+		DraftConsumption *draftConsumption `json:"draftConsumption"`
+	} `json:"result"`
+	Error *struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+type draftConsumption struct {
+	Kind         string `json:"kind"`
+	TextDocument struct {
+		URI     string `json:"uri"`
+		Version int    `json:"version"`
+	} `json:"textDocument"`
+	Edits []struct {
+		Range struct {
+			Start struct {
+				Line      int `json:"line"`
+				Character int `json:"character"`
+			} `json:"start"`
+			End struct {
+				Line      int `json:"line"`
+				Character int `json:"character"`
+			} `json:"end"`
+		} `json:"range"`
+		NewText string `json:"newText"`
+	} `json:"edits"`
+}
+
 func TestCompletionAndStaleSubmitAppendNothingThenRepeatedExplicitSubmitsAreDistinct(t *testing.T) {
 	root := t.TempDir()
 	queue := filepath.Join(root, "accepted.jsonl")
@@ -173,6 +207,216 @@ func TestCommandNotebookCompletionDiagnosticsAndCursorLineSubmit(t *testing.T) {
 	if payload["action"] != "read" || payload["agent"] != "reviewer" || payload["lines"] != float64(100) {
 		t.Fatalf("payload=%#v", payload)
 	}
+}
+
+func TestAcceptedCommandReturnsExactVersionTiedObjectConsumption(t *testing.T) {
+	world, err := hq.LoadSchemaJSONL(strings.NewReader(
+		`{"kind":"hq.command.v1","name":"dummy.echo","instruction":{"version":"instruction.v1","op":"run","target":"dummy","payload":{}},"fields":[{"name":"value","type":"string","required":true,"bind":"payload.value"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const uri = "file:///consume.hq"
+	lf := "@dummy.echo\nvalue=first\n\n@dummy.echo\nvalue=middle\n\n@dummy.echo\nvalue=最後😀"
+	cases := []struct {
+		name          string
+		text          string
+		line          int
+		wantStartLine int
+		wantEndLine   int
+		wantEndChar   int
+		wantAfter     string
+	}{
+		{
+			name: "only object without final newline", text: "@dummy.echo\nvalue=only", line: 1,
+			wantStartLine: 0, wantEndLine: 1, wantEndChar: 10,
+			wantAfter: "",
+		},
+		{
+			name: "only object with final newline", text: "@dummy.echo\nvalue=only\n", line: 1,
+			wantStartLine: 0, wantEndLine: 2,
+			wantAfter: "",
+		},
+		{
+			name: "only object with combining character", text: "@dummy.echo\nvalue=e\u0301", line: 1,
+			wantStartLine: 0, wantEndLine: 1, wantEndChar: 8,
+			wantAfter: "",
+		},
+		{
+			name: "first object with LF", text: lf, line: 1,
+			wantStartLine: 0, wantEndLine: 3,
+			wantAfter: "@dummy.echo\nvalue=middle\n\n@dummy.echo\nvalue=最後😀",
+		},
+		{
+			name: "middle object with LF", text: lf, line: 4,
+			wantStartLine: 3, wantEndLine: 6,
+			wantAfter: "@dummy.echo\nvalue=first\n\n@dummy.echo\nvalue=最後😀",
+		},
+		{
+			name: "last object with Unicode UTF-16 end", text: lf, line: 7,
+			wantStartLine: 6, wantEndLine: 7, wantEndChar: 10,
+			wantAfter: "@dummy.echo\nvalue=first\n\n@dummy.echo\nvalue=middle\n\n",
+		},
+		{
+			name: "first object with CRLF",
+			text: "@dummy.echo\r\nvalue=first\r\n\r\n@dummy.echo\r\nvalue=second",
+			line: 1, wantStartLine: 0, wantEndLine: 3,
+			wantAfter: "@dummy.echo\r\nvalue=second",
+		},
+	}
+
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			queue := filepath.Join(t.TempDir(), "accepted.jsonl")
+			if err := os.WriteFile(queue, nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			server := &Server{
+				profile: hqprofile.Profile{Name: "local", DeploymentID: "dep-consume", AcceptedPath: queue},
+				world:   world, documents: map[string]document{uri: {Text: test.text, Version: 19}},
+			}
+			var output bytes.Buffer
+			request := message{JSONRPC: "2.0", ID: json.RawMessage(`1`), Params: mustJSON(map[string]any{
+				"command": "hq.submit", "arguments": []any{map[string]any{"uri": uri, "version": 19, "line": test.line}},
+			})}
+			if err := server.executeCommand(&output, request); err != nil {
+				t.Fatal(err)
+			}
+			wire := decodeSubmitResponse(t, output.String())
+			if wire.Error != nil {
+				t.Fatalf("submit error=%#v", wire.Error)
+			}
+			if wire.Result.Kind != SubmitResultKind || wire.Result.Status != "queued" || wire.Result.QueueID == "" {
+				t.Fatalf("result=%#v", wire.Result)
+			}
+			plan := wire.Result.DraftConsumption
+			if plan == nil || plan.Kind != DraftConsumptionKind || plan.TextDocument.URI != uri || plan.TextDocument.Version != 19 {
+				t.Fatalf("draft consumption=%#v", plan)
+			}
+			if len(plan.Edits) != 1 || plan.Edits[0].NewText != "" {
+				t.Fatalf("edits=%#v", plan.Edits)
+			}
+			edit := plan.Edits[0]
+			if edit.Range.Start.Line != test.wantStartLine || edit.Range.Start.Character != 0 || edit.Range.End.Line != test.wantEndLine || edit.Range.End.Character != test.wantEndChar {
+				t.Fatalf("range=%#v", edit.Range)
+			}
+			if after := applyDraftEdit(t, test.text, plan); after != test.wantAfter {
+				t.Fatalf("after=%q want=%q", after, test.wantAfter)
+			}
+			assertQueueLines(t, queue, 1)
+		})
+	}
+}
+
+func TestLegacyJSONAndFailedAppendReturnNoDraftConsumption(t *testing.T) {
+	world, err := hq.LoadSchemaJSONL(strings.NewReader(
+		`{"kind":"hq.command.v1","name":"dummy.echo","instruction":{"version":"instruction.v1","op":"run","target":"dummy","payload":{}},"fields":[{"name":"value","type":"string","required":true,"bind":"payload.value"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Run("legacy one-line JSON", func(t *testing.T) {
+		queue := filepath.Join(t.TempDir(), "accepted.jsonl")
+		if err := os.WriteFile(queue, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		const uri = "file:///legacy.hq"
+		text := `{"version":"instruction.v1","op":"run","target":"dummy","payload":{}}`
+		server := &Server{profile: hqprofile.Profile{AcceptedPath: queue}, world: world, documents: map[string]document{uri: {Text: text, Version: 3}}}
+		var output bytes.Buffer
+		request := message{JSONRPC: "2.0", ID: json.RawMessage(`1`), Params: mustJSON(map[string]any{
+			"command": "hq.submit", "arguments": []any{map[string]any{"uri": uri, "version": 3, "line": 0}},
+		})}
+		if err := server.executeCommand(&output, request); err != nil {
+			t.Fatal(err)
+		}
+		wire := decodeSubmitResponse(t, output.String())
+		if wire.Error != nil || wire.Result.DraftConsumption != nil {
+			t.Fatalf("response=%#v", wire)
+		}
+		assertQueueLines(t, queue, 1)
+	})
+
+	t.Run("append failure", func(t *testing.T) {
+		root := t.TempDir()
+		const uri = "file:///failure.hq"
+		server := &Server{profile: hqprofile.Profile{AcceptedPath: root}, world: world, documents: map[string]document{uri: {Text: "@dummy.echo\nvalue=kept", Version: 4}}}
+		var output bytes.Buffer
+		request := message{JSONRPC: "2.0", ID: json.RawMessage(`1`), Params: mustJSON(map[string]any{
+			"command": "hq.submit", "arguments": []any{map[string]any{"uri": uri, "version": 4, "line": 1}},
+		})}
+		if err := server.executeCommand(&output, request); err != nil {
+			t.Fatal(err)
+		}
+		wire := decodeSubmitResponse(t, output.String())
+		if wire.Error == nil || wire.Result.DraftConsumption != nil || strings.Contains(output.String(), DraftConsumptionKind) {
+			t.Fatalf("response=%s", output.String())
+		}
+	})
+
+	t.Run("stale document", func(t *testing.T) {
+		queue := filepath.Join(t.TempDir(), "accepted.jsonl")
+		if err := os.WriteFile(queue, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		const uri = "file:///stale.hq"
+		server := &Server{profile: hqprofile.Profile{AcceptedPath: queue}, world: world, documents: map[string]document{uri: {Text: "@dummy.echo\nvalue=kept", Version: 5}}}
+		var output bytes.Buffer
+		request := message{JSONRPC: "2.0", ID: json.RawMessage(`1`), Params: mustJSON(map[string]any{
+			"command": "hq.submit", "arguments": []any{map[string]any{"uri": uri, "version": 4, "line": 1}},
+		})}
+		if err := server.executeCommand(&output, request); err != nil {
+			t.Fatal(err)
+		}
+		wire := decodeSubmitResponse(t, output.String())
+		if wire.Error == nil || wire.Result.DraftConsumption != nil || strings.Contains(output.String(), DraftConsumptionKind) {
+			t.Fatalf("response=%s", output.String())
+		}
+		assertQueueLines(t, queue, 0)
+	})
+}
+
+func TestRepeatedExplicitCommandSubmitsKeepTheSamePlanAndCreateFreshAcceptedIDs(t *testing.T) {
+	world, err := hq.LoadSchemaJSONL(strings.NewReader(
+		`{"kind":"hq.command.v1","name":"dummy.echo","instruction":{"version":"instruction.v1","op":"run","target":"dummy","payload":{}},"fields":[{"name":"value","type":"string","required":true,"bind":"payload.value"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	queue := filepath.Join(t.TempDir(), "accepted.jsonl")
+	if err := os.WriteFile(queue, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const uri = "file:///repeat.hq"
+	server := &Server{
+		profile: hqprofile.Profile{AcceptedPath: queue}, world: world,
+		documents: map[string]document{uri: {Text: "@dummy.echo\nvalue=same", Version: 9}},
+	}
+	request := message{JSONRPC: "2.0", ID: json.RawMessage(`1`), Params: mustJSON(map[string]any{
+		"command": "hq.submit", "arguments": []any{map[string]any{"uri": uri, "version": 9, "line": 1}},
+	})}
+	var firstOutput bytes.Buffer
+	if err := server.executeCommand(&firstOutput, request); err != nil {
+		t.Fatal(err)
+	}
+	var secondOutput bytes.Buffer
+	if err := server.executeCommand(&secondOutput, request); err != nil {
+		t.Fatal(err)
+	}
+	first := decodeSubmitResponse(t, firstOutput.String())
+	second := decodeSubmitResponse(t, secondOutput.String())
+	if first.Result.QueueID == "" || second.Result.QueueID == "" || first.Result.QueueID == second.Result.QueueID {
+		t.Fatalf("queue ids: first=%q second=%q", first.Result.QueueID, second.Result.QueueID)
+	}
+	firstPlan, err := json.Marshal(first.Result.DraftConsumption)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondPlan, err := json.Marshal(second.Result.DraftConsumption)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(firstPlan, secondPlan) {
+		t.Fatalf("plans differ: first=%s second=%s", firstPlan, secondPlan)
+	}
+	assertQueueLines(t, queue, 2)
 }
 
 func TestSelectedWorldRecallCompletionTransportsCandidateAndAppendsNothing(t *testing.T) {
@@ -381,6 +625,36 @@ func decodeCompletionResponse(t *testing.T, framed string) completionResponse {
 		t.Fatal(err)
 	}
 	return wire
+}
+
+func decodeSubmitResponse(t *testing.T, framed string) submitResponse {
+	t.Helper()
+	parts := strings.SplitN(framed, "\r\n\r\n", 2)
+	if len(parts) != 2 {
+		t.Fatalf("unframed submit=%s", framed)
+	}
+	var wire submitResponse
+	if err := json.Unmarshal([]byte(parts[1]), &wire); err != nil {
+		t.Fatal(err)
+	}
+	return wire
+}
+
+func applyDraftEdit(t *testing.T, text string, plan *draftConsumption) string {
+	t.Helper()
+	if plan == nil || len(plan.Edits) != 1 {
+		t.Fatalf("invalid draft consumption=%#v", plan)
+	}
+	edit := plan.Edits[0]
+	start, err := byteOffset(text, edit.Range.Start.Line, edit.Range.Start.Character)
+	if err != nil {
+		t.Fatal(err)
+	}
+	end, err := byteOffset(text, edit.Range.End.Line, edit.Range.End.Character)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return text[:start] + edit.NewText + text[end:]
 }
 
 func assertQueueLines(t *testing.T, path string, expected int) {

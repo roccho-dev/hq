@@ -21,7 +21,10 @@ import (
 	"hq/internal/hqprofile"
 )
 
-const SubmitResultKind = "hq.submitResult.v1"
+const (
+	SubmitResultKind     = "hq.submitResult.v1"
+	DraftConsumptionKind = "hq.draftConsumption.v1"
+)
 
 type document struct {
 	Text    string
@@ -246,9 +249,28 @@ func (s *Server) executeCommand(w io.Writer, msg message) error {
 	if !ok || doc.Version != arg.Version {
 		return writeError(w, msg.ID, -32602, "document version is missing or stale")
 	}
-	draft, err := s.compileSubmit(doc.Text, arg.Line)
+	draft, objectRange, err := s.compileSubmit(doc.Text, arg.Line)
 	if err != nil {
 		return writeError(w, msg.ID, -32602, err.Error())
+	}
+	var draftConsumption map[string]any
+	if objectRange != nil {
+		start, startErr := positionAtByte(doc.Text, objectRange.StartByte)
+		end, endErr := positionAtByte(doc.Text, objectRange.EndByte)
+		if startErr != nil || endErr != nil {
+			return writeError(w, msg.ID, -32603, "accepted object range is outside document")
+		}
+		draftConsumption = map[string]any{
+			"kind": DraftConsumptionKind,
+			"textDocument": map[string]any{
+				"uri":     arg.URI,
+				"version": arg.Version,
+			},
+			"edits": []any{map[string]any{
+				"range":   map[string]any{"start": start, "end": end},
+				"newText": "",
+			}},
+		}
 	}
 	draft, acceptedID, err := s.finalizeExplicitAcceptance(draft)
 	if err != nil {
@@ -267,24 +289,31 @@ func (s *Server) executeCommand(w io.Writer, msg message) error {
 	if draft.Provenance != nil {
 		result["world"] = draft.Provenance.World
 	}
+	if draftConsumption != nil {
+		result["draftConsumption"] = draftConsumption
+	}
 	return writeMessage(w, message{JSONRPC: "2.0", ID: msg.ID, Result: result})
 }
 
-func (s *Server) compileSubmit(text string, line int) (hq.CompileDraft, error) {
+func (s *Server) compileSubmit(text string, line int) (hq.CompileDraft, *hq.CommandObjectRange, error) {
 	if len(s.world.Commands) == 0 {
-		return hq.CompileLine(text, s.world), nil
+		return hq.CompileLine(text, s.world), nil, nil
 	}
 	commandLine, err := hq.LineAt(text, line)
 	if err != nil {
-		return hq.CompileDraft{}, err
+		return hq.CompileDraft{}, nil, err
 	}
 	if strings.HasPrefix(strings.TrimSpace(commandLine), "{") {
 		if !json.Valid([]byte(strings.TrimSpace(commandLine))) {
-			return hq.CompileDraft{}, errors.New("submit line is not one complete JSON object")
+			return hq.CompileDraft{}, nil, errors.New("submit line is not one complete JSON object")
 		}
-		return hq.CompileLine(commandLine, s.world), nil
+		return hq.CompileLine(commandLine, s.world), nil, nil
 	}
-	return hq.CompileSelectedCommandObject(text, line, s.world)
+	draft, objectRange, err := hq.CompileSelectedCommandObjectWithRange(text, line, s.world)
+	if err != nil {
+		return hq.CompileDraft{}, nil, err
+	}
+	return draft, &objectRange, nil
 }
 
 func (s *Server) finalizeExplicitAcceptance(draft hq.CompileDraft) (hq.CompileDraft, string, error) {
