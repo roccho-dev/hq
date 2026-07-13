@@ -30,11 +30,13 @@ type CommandField struct {
 // CommandDefinition is an adapter-provided input-language declaration. Base
 // instruction fields and argument bindings are data, not compiler semantics.
 type CommandDefinition struct {
-	Kind        string         `json:"kind"`
-	Name        string         `json:"name"`
-	Description string         `json:"description,omitempty"`
-	Instruction map[string]any `json:"instruction"`
-	Fields      []CommandField `json:"fields,omitempty"`
+	Kind           string         `json:"kind"`
+	CommandID      string         `json:"command_id,omitempty"`
+	CommandVersion string         `json:"command_version,omitempty"`
+	Name           string         `json:"name"`
+	Description    string         `json:"description,omitempty"`
+	Instruction    map[string]any `json:"instruction"`
+	Fields         []CommandField `json:"fields,omitempty"`
 }
 
 // LocalToolDefinition is a finite, data-only description of one exact local
@@ -109,6 +111,8 @@ type LocalToolNativeSelector struct {
 // JsonlWorld is the schema-independent domain model used by hq core.
 // Adapters translate concrete files into this type before calling core.
 type JsonlWorld struct {
+	Identity   *WorldDefinition      `json:"identity,omitempty"`
+	Digest     string                `json:"digest,omitempty"`
 	Keys       []SchemaKey           `json:"keys"`
 	Commands   []CommandDefinition   `json:"commands,omitempty"`
 	LocalTools []LocalToolDefinition `json:"local_tools,omitempty"`
