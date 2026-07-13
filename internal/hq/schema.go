@@ -30,10 +30,10 @@ type JsonlWorld = core.JsonlWorld
 // The concrete JSONL data is owned by the current adapter, not core.
 const DefaultSchemaJSONL = current.DefaultSchemaJSONL
 
-// LoadSchemaJSONL parses the current proof-era schema adapter format. It remains
-// the compatibility loader for identity-free fixtures and legacy inputs.
+// LoadSchemaJSONL loads either an explicit selected hq.world.v1 world or a
+// legacy identity-free fixture. Only the former can produce strong provenance.
 func LoadSchemaJSONL(r io.Reader) (*JsonlWorld, error) {
-	return current.LoadSchemaJSONL(r)
+	return current.LoadRuntimeWorldJSONL(r)
 }
 
 // LoadSelectedWorldJSONL requires one explicit immutable selected-world identity
