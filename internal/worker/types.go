@@ -2,8 +2,10 @@ package worker
 
 import (
 	"encoding/json"
-	"hq/internal/workersafety"
 	"time"
+
+	"hq/internal/core"
+	"hq/internal/workersafety"
 )
 
 const (
@@ -63,6 +65,7 @@ type Diagnostic struct {
 type ReadRow struct {
 	Source        SourceRef
 	Instruction   Instruction
+	Provenance    *core.CompileProvenance
 	UnknownFields []string
 	ParseError    *Diagnostic
 }
