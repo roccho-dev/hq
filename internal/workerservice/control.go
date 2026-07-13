@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -137,7 +138,11 @@ func AcknowledgeStop(profile hqprofile.Profile, request StopRequest, now time.Ti
 	if err := validateStopRequest(request); err != nil {
 		return StopReceipt{}, err
 	}
-	if request.Profile != profile.Name || request.DeploymentID != profile.DeploymentID || request.Workspace != profile.WorkspaceRoot {
+	workspace, err := canonicalControlWorkspace(profile.WorkspaceRoot)
+	if err != nil {
+		return StopReceipt{}, err
+	}
+	if request.Profile != profile.Name || request.DeploymentID != profile.DeploymentID || request.Workspace != workspace {
 		return StopReceipt{}, errors.New("stop request does not match the selected profile")
 	}
 	path, err := stopControlPath(request.Workspace, request.ClaimID, "request")
@@ -158,6 +163,9 @@ func AcknowledgeStop(profile hqprofile.Profile, request StopRequest, now time.Ti
 	if inspection.Exists {
 		return StopReceipt{}, errors.New("managed worker claim still exists; refusing graceful-stop acknowledgement")
 	}
+	if err := requireHeartbeatAbsent(profile.WorkspaceRoot); err != nil {
+		return StopReceipt{}, err
+	}
 	receipt := StopReceipt{
 		Kind: StopReceiptKind, RequestID: request.RequestID, ClaimID: request.ClaimID,
 		WorkerID: request.WorkerID, Workspace: request.Workspace, Profile: request.Profile,
@@ -173,8 +181,8 @@ func AcknowledgeStop(profile hqprofile.Profile, request StopRequest, now time.Ti
 	return receipt, nil
 }
 
-// WaitStopped requires both worker-written acknowledgement and exact claim
-// release. Claim disappearance without acknowledgement is a crash/non-green.
+// WaitStopped requires worker-written acknowledgement, exact claim release, and
+// heartbeat removal. Claim disappearance alone is a crash/non-green.
 func WaitStopped(ctx context.Context, profile hqprofile.Profile, request StopRequest) (StopReceipt, error) {
 	if err := validateControlProfile(profile); err != nil {
 		return StopReceipt{}, err
@@ -199,6 +207,9 @@ func WaitStopped(ctx context.Context, profile hqprofile.Profile, request StopReq
 				return StopReceipt{}, inspectErr
 			}
 			if !inspection.Exists {
+				if err := requireHeartbeatAbsent(profile.WorkspaceRoot); err != nil {
+					return StopReceipt{}, err
+				}
 				return receipt, nil
 			}
 			if inspection.Owner == nil || inspection.Owner.ClaimID != request.ClaimID {
@@ -365,6 +376,29 @@ func writeJSONAtomic(path string, value any) error {
 		return closeErr
 	}
 	return os.Rename(temporaryPath, path)
+}
+
+func canonicalControlWorkspace(root string) (string, error) {
+	absolute, err := filepath.Abs(root)
+	if err != nil {
+		return "", fmt.Errorf("resolve worker control workspace: %w", err)
+	}
+	resolved, err := filepath.EvalSymlinks(absolute)
+	if err != nil {
+		return "", fmt.Errorf("resolve worker control workspace identity: %w", err)
+	}
+	return filepath.Clean(resolved), nil
+}
+
+func requireHeartbeatAbsent(projectRoot string) error {
+	_, err := workerclaim.ReadHeartbeat(projectRoot)
+	if err == nil {
+		return errors.New("managed worker heartbeat still exists; refusing graceful-stop success")
+	}
+	if !os.IsNotExist(err) {
+		return fmt.Errorf("inspect managed worker heartbeat after stop: %w", err)
+	}
+	return nil
 }
 
 func controlPollInterval(profile hqprofile.Profile) time.Duration {
