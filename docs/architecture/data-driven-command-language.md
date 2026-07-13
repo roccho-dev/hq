@@ -2,8 +2,9 @@
 
 ## Boundary
 
-The editor buffer may contain human-facing, multi-line command objects instead
-of requiring users to author canonical instruction objects directly.
+The editor buffer is a disposable draft surface for human-facing, multi-line
+command objects. It is not a durable history or execution authority and does
+not require users to author canonical instruction objects directly.
 
 ```text
 @host.open
@@ -16,9 +17,10 @@ lines=100
 ```
 
 ```text
-command text
+command draft
   -> generic hq parse / completion / validation
   -> hq.command.v1 definitions from the profile world
+  -> explicit submit
   -> accepted.instruction
   -> canonical instruction.v1
 ```
@@ -43,7 +45,7 @@ without changing the hq binary or the LSP adapter. Unsupported record kinds,
 duplicate commands or fields, unsupported primitive types, and missing binding
 paths fail while loading the world.
 
-## Notebook behavior
+## Disposable draft behavior
 
 - An object starts at `@command` and ends immediately before the next
   `@command` or at end of file.
@@ -55,9 +57,16 @@ paths fail while loading the world.
 - Diagnostics validate each object independently and reject non-empty field
   lines that occur before any `@command` header.
 - Explicit submit lowers only the object containing the LSP code-action line.
-- Submit assigns the canonical instruction identity and timestamp.
-- Existing lines remain editor history; the managed worker observes only the
-  canonical accepted queue, never the live Vim buffer.
+- Submit assigns a fresh canonical instruction identity and acceptance time.
+- Selection and editing change only the draft and append no accepted row.
+- The buffer may contain multiple temporary objects, but none is durable
+  history or worker input until explicitly submitted.
+- The buffer may be wiped without deleting accepted history.
+- Durable recall history, when enabled by #114/#117, is derived only from
+  provenance-complete accepted-input evidence, never from buffer lines, Vim
+  history, registers, swap, undo files, or terminal history.
+- The managed worker observes only the canonical accepted queue, never the live
+  Vim buffer or accepted-input presentation evidence.
 
 The proof does not define or install a custom Tab mapping. Completion items use
 standard LSP `textEdit`; editor-specific acceptance UX remains an editor-client
