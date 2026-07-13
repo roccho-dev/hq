@@ -155,6 +155,10 @@ func (s *Server) complete(w io.Writer, msg message) error {
 		if startErr != nil || endErr != nil {
 			return writeError(w, msg.ID, -32603, "completion edit is outside document")
 		}
+		data := map[string]any{"compileDraft": suggestion.Draft, "deploymentId": s.profile.DeploymentID}
+		if worldRef, selected := s.world.SelectedRef(); selected {
+			data["world"] = worldRef
+		}
 		items = append(items, map[string]any{
 			"label":            suggestion.Label,
 			"detail":           suggestion.Detail,
@@ -165,7 +169,7 @@ func (s *Server) complete(w io.Writer, msg message) error {
 				"range":   map[string]any{"start": start, "end": end},
 				"newText": suggestion.Edit.Text,
 			},
-			"data": map[string]any{"compileDraft": suggestion.Draft, "deploymentId": s.profile.DeploymentID},
+			"data": data,
 		})
 	}
 	return writeMessage(w, message{JSONRPC: "2.0", ID: msg.ID, Result: map[string]any{"isIncomplete": false, "items": items}})
@@ -226,7 +230,7 @@ func (s *Server) executeCommand(w io.Writer, msg message) error {
 	if err != nil {
 		return writeError(w, msg.ID, -32602, err.Error())
 	}
-	draft, acceptedID, err := finalizeExplicitAcceptance(draft)
+	draft, acceptedID, err := s.finalizeExplicitAcceptance(draft)
 	if err != nil {
 		return writeError(w, msg.ID, -32603, err.Error())
 	}
@@ -239,6 +243,9 @@ func (s *Server) executeCommand(w io.Writer, msg message) error {
 		"queueKind":    draft.Kind,
 		"queueId":      acceptedID,
 		"deploymentId": s.profile.DeploymentID,
+	}
+	if draft.Provenance != nil {
+		result["world"] = draft.Provenance.World
 	}
 	return writeMessage(w, message{JSONRPC: "2.0", ID: msg.ID, Result: result})
 }
@@ -257,20 +264,11 @@ func (s *Server) compileSubmit(text string, line int) (hq.CompileDraft, error) {
 		}
 		return hq.CompileLine(commandLine, s.world), nil
 	}
-	return hq.CompileCommandObject(text, line, s.world)
+	return hq.CompileSelectedCommandObject(text, line, s.world)
 }
 
-func finalizeExplicitAcceptance(draft hq.CompileDraft) (hq.CompileDraft, string, error) {
-	encoded, err := json.Marshal(draft)
-	if err != nil {
-		return hq.CompileDraft{}, "", err
-	}
-	var envelope map[string]json.RawMessage
-	if err := json.Unmarshal(encoded, &envelope); err != nil {
-		return hq.CompileDraft{}, "", err
-	}
-	var instruction map[string]any
-	if err := json.Unmarshal(envelope["instruction"], &instruction); err != nil {
+func (s *Server) finalizeExplicitAcceptance(draft hq.CompileDraft) (hq.CompileDraft, string, error) {
+	if draft.Instruction == nil {
 		return hq.CompileDraft{}, "", errors.New("compile draft has no canonical instruction object")
 	}
 	random := make([]byte, 16)
@@ -278,24 +276,16 @@ func finalizeExplicitAcceptance(draft hq.CompileDraft) (hq.CompileDraft, string,
 		return hq.CompileDraft{}, "", fmt.Errorf("generate accepted instruction identity: %w", err)
 	}
 	acceptedID := "ins-lsp-" + hex.EncodeToString(random)
-	instruction["id"] = acceptedID
-	if _, ok := instruction["created_at"]; !ok {
-		instruction["created_at"] = time.Now().UTC().Format(time.RFC3339Nano)
+	draft.Instruction["id"] = acceptedID
+	draft.Instruction["created_at"] = time.Now().UTC().Format(time.RFC3339Nano)
+	inputKind := hq.CanonicalJSONInputKind
+	if draft.Provenance != nil {
+		inputKind = draft.Provenance.InputKind
 	}
-	instructionJSON, err := json.Marshal(instruction)
-	if err != nil {
+	if err := hq.BindFinalInstructionProvenance(&draft, s.world, inputKind); err != nil {
 		return hq.CompileDraft{}, "", err
 	}
-	envelope["instruction"] = instructionJSON
-	finalJSON, err := json.Marshal(envelope)
-	if err != nil {
-		return hq.CompileDraft{}, "", err
-	}
-	var final hq.CompileDraft
-	if err := json.Unmarshal(finalJSON, &final); err != nil {
-		return hq.CompileDraft{}, "", err
-	}
-	return final, acceptedID, nil
+	return draft, acceptedID, nil
 }
 
 func (s *Server) publishDiagnostics(w io.Writer, uri string) error {
