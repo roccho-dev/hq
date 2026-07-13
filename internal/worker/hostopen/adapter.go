@@ -58,19 +58,26 @@ func (a *Adapter) Run(ctx context.Context, r adapter.Request, _ adapter.Emit) (a
 		}
 		args = append([]string{"--hq-idempotency-key", r.IdempotencyKey, "--"}, args...)
 	}
-	cmd := exec.CommandContext(ctx, a.binding.ExecutablePath, args...)
-	cmd.Dir = r.CWD
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		m := strings.TrimSpace(stderr.String())
-		if m == "" {
-			m = err.Error()
-		}
-		return adapter.Completion{}, &adapter.FailureError{Class: adapter.FailureFailed, Code: "provider_failed", Message: m}
+	if err := ctx.Err(); err != nil {
+		return adapter.Completion{}, err
 	}
-	return adapter.Completion{FinalText: fmt.Sprintf("host.open completed via %s", a.binding.ProviderID), FinalPath: p.Path}, nil
+	// host.open.v1 is a GUI launch/handoff contract. Once Start succeeds, waiting
+	// for the provider process would conflate a successful handoff with the
+	// provider's later process exit (Explorer may return a non-zero status after
+	// it has opened the requested path).
+	cmd := exec.Command(a.binding.ExecutablePath, args...)
+	cmd.Dir = r.CWD
+	if err := cmd.Start(); err != nil {
+		return adapter.Completion{}, &adapter.FailureError{Class: adapter.FailureFailed, Code: "provider_failed", Message: err.Error()}
+	}
+	releaseWarning := ""
+	if err := cmd.Process.Release(); err != nil {
+		// Start already crossed the external-effect boundary. A local handle
+		// release warning must not turn a successful GUI handoff into a failed
+		// result that implies the provider was never launched.
+		releaseWarning = fmt.Sprintf("; process release warning: %v", err)
+	}
+	return adapter.Completion{FinalText: fmt.Sprintf("host.open launch handed off via %s%s", a.binding.ProviderID, releaseWarning), FinalPath: p.Path}, nil
 }
 
 type payload struct {

@@ -99,7 +99,9 @@ func TestServeAutomaticallyProcessesAcceptedHostIntentWithExactProvider(t *testi
 	for time.Now().Before(deadline) {
 		data, loadErr := worker.LoadEventFile(eventsPath)
 		if loadErr == nil && len(data.Results) > 0 && data.Results[len(data.Results)-1].Kind == worker.ResultCompleted {
-			break
+			if _, markerErr := os.Stat(marker); markerErr == nil {
+				break
+			}
 		}
 		time.Sleep(20 * time.Millisecond)
 	}

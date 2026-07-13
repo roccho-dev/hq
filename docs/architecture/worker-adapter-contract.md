@@ -93,6 +93,18 @@ A completion with neither text nor path is rejected. Missing final output cannot
 
 No adapter can set identity, ordering, time, status, or final lifecycle kind because those fields do not exist in adapter-owned types.
 
+## host.open.v1 launch completion
+
+host.open.v1 is a one-way GUI launch/handoff contract. The adapter directly invokes the exact absolute executable from the verified capability binding with fixed argument boundaries. It does not use a shell, PowerShell, or ambient PATH, and it re-verifies provider integrity immediately before launch.
+
+For this contract:
+
+- validation, path, capability, deployment, and provider-integrity failures happen before launch;
+- Start failure maps to failed(provider_failed) and produces no successful completion;
+- successful Start followed by process-handle release returns a transient completion, which the worker records as canonical completed.
+
+This launch completion means that the verified provider accepted the OS process handoff. It does not wait for or reinterpret the provider's later process exit. In particular, Explorer returning non-zero after handing the request to its GUI session cannot overwrite a successful launch as provider_failed. A local process-release warning after Start is included in final text but does not imply that the external effect failed.
+
 ## Registry rules
 
 - Registration is explicit and immutable after construction.
