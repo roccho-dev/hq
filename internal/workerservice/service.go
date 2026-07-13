@@ -80,6 +80,10 @@ func Serve(ctx context.Context, profile hqprofile.Profile, workerID string, out 
 			return heartbeatErr
 		}
 		if processErr != nil {
+			if ctx.Err() != nil && errors.Is(processErr, context.Canceled) {
+				_ = encode(out, Lifecycle{Kind: LifecycleKind, State: "stopped", Profile: profile.Name, DeploymentID: profile.DeploymentID, WorkerID: owner.WorkerID, ClaimID: owner.ClaimID, ObservedAt: time.Now().UTC()})
+				return nil
+			}
 			return processErr
 		}
 		select {
