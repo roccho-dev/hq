@@ -146,6 +146,11 @@ func processOnce(ctx context.Context, profile hqprofile.Profile) (string, error)
 	if closeErr != nil {
 		return StateSourceUnavailable, closeErr
 	}
+	world, err := loadProfileWorld(profile)
+	if err != nil {
+		return StateEvidenceInvalid, err
+	}
+	rows = validateSelectedWorldRows(rows, world)
 	prior, err := worker.LoadEventFile(profile.EventsPath)
 	if err != nil {
 		return StateEvidenceInvalid, err
@@ -187,7 +192,7 @@ func loadRegistry(profile hqprofile.Profile) (*adapter.Registry, error) {
 	if err != nil {
 		return nil, err
 	}
-	world, loadErr := current.LoadSchemaJSONL(worldFile)
+	world, loadErr := current.LoadRuntimeWorldJSONL(worldFile)
 	closeErr := worldFile.Close()
 	if loadErr != nil {
 		return nil, loadErr
@@ -281,20 +286,14 @@ func isTerminal(kind string) bool {
 
 func hasReconciliation(results []worker.ResultRow) bool {
 	latest := map[string]worker.ResultRow{}
-	for _, row := range results {
-		current, exists := latest[row.RunID]
-		if !exists || row.Seq > current.Seq {
-			latest[row.RunID] = row
+	for _, result := range results {
+		current, exists := latest[result.RunID]
+		if !exists || result.Seq > current.Seq {
+			latest[result.RunID] = result
 		}
 	}
-	keys := make([]string, 0, len(latest))
-	for key := range latest {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		row := latest[key]
-		if row.Kind == worker.ResultBlocked && row.Error != nil && row.Error.Code == "reconcile_required" {
+	for _, result := range latest {
+		if result.Kind == worker.ResultStarted {
 			return true
 		}
 	}
@@ -305,4 +304,13 @@ func encode(w io.Writer, value any) error {
 	encoder := json.NewEncoder(w)
 	encoder.SetEscapeHTML(false)
 	return encoder.Encode(value)
+}
+
+func SortedStates(values map[string]string) []string {
+	out := make([]string, 0, len(values))
+	for key := range values {
+		out = append(out, key)
+	}
+	sort.Strings(out)
+	return out
 }
