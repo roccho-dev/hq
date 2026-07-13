@@ -162,7 +162,7 @@ func processOnce(ctx context.Context, profile hqprofile.Profile) (string, error)
 		}
 		return StateReady, nil
 	}
-	registry, err := loadRegistry(profile)
+	registry, err := loadRegistryForWorld(profile, world)
 	if err != nil {
 		return StateProviderUnavailable, err
 	}
