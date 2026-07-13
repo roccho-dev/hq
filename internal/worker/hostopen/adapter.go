@@ -45,13 +45,14 @@ func (a *Adapter) Run(ctx context.Context, r adapter.Request, _ adapter.Emit) (a
 	if !filepath.IsAbs(p.Path) {
 		return adapter.Completion{}, adapter.NewBlockedError("path_not_absolute", "host.open path must be absolute")
 	}
-	if _, err := os.Stat(p.Path); err != nil {
+	nativePath := filepath.Clean(p.Path)
+	if _, err := os.Stat(nativePath); err != nil {
 		return adapter.Completion{}, adapter.NewBlockedError("path_unavailable", err.Error())
 	}
 	if err := a.binding.VerifyExecutable(); err != nil {
 		return adapter.Completion{}, adapter.NewBlockedError("provider_integrity_failed", err.Error())
 	}
-	args := []string{p.Path}
+	args := []string{nativePath}
 	if r.IdempotencyKey != "" {
 		if a.binding.IdempotencyContract == "" {
 			return adapter.Completion{}, adapter.NewBlockedError("idempotency_unsupported", "provider does not declare an idempotency contract")
@@ -77,7 +78,7 @@ func (a *Adapter) Run(ctx context.Context, r adapter.Request, _ adapter.Emit) (a
 		// result that implies the provider was never launched.
 		releaseWarning = fmt.Sprintf("; process release warning: %v", err)
 	}
-	return adapter.Completion{FinalText: fmt.Sprintf("host.open launch handed off via %s%s", a.binding.ProviderID, releaseWarning), FinalPath: p.Path}, nil
+	return adapter.Completion{FinalText: fmt.Sprintf("host.open launch handed off via %s%s", a.binding.ProviderID, releaseWarning), FinalPath: nativePath}, nil
 }
 
 type payload struct {

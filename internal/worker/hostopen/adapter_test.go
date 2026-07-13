@@ -88,6 +88,8 @@ func TestRunCompletesAfterSuccessfulReleaseAndHandoff(t *testing.T) {
 	if err := os.Mkdir(target, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	requestPath := filepath.ToSlash(target)
+	cleanPath := filepath.Clean(requestPath)
 	marker := filepath.Join(root, "provider-started.json")
 	cleanup := filepath.Join(root, "provider-cleanup")
 	t.Setenv(helperModeEnv, "handoff")
@@ -95,6 +97,7 @@ func TestRunCompletesAfterSuccessfulReleaseAndHandoff(t *testing.T) {
 	t.Setenv(helperCleanupEnv, cleanup)
 	t.Setenv("PATH", t.TempDir())
 	t.Cleanup(func() { _ = os.WriteFile(cleanup, nil, 0o600) })
+	request := testRequest(t, requestPath, root)
 
 	type outcome struct {
 		completion adapter.Completion
@@ -103,7 +106,7 @@ func TestRunCompletesAfterSuccessfulReleaseAndHandoff(t *testing.T) {
 	done := make(chan outcome, 1)
 	started := time.Now()
 	go func() {
-		completion, err := a.Run(context.Background(), testRequest(t, target, root), nil)
+		completion, err := a.Run(context.Background(), request, nil)
 		done <- outcome{completion: completion, err: err}
 	}()
 
@@ -119,7 +122,7 @@ func TestRunCompletesAfterSuccessfulReleaseAndHandoff(t *testing.T) {
 	if elapsed := time.Since(started); elapsed >= 2*time.Second {
 		t.Fatalf("launch handoff took %v", elapsed)
 	}
-	if got.completion.FinalText != "host.open launch handed off via test-host-provider" || got.completion.FinalPath != target {
+	if got.completion.FinalText != "host.open launch handed off via test-host-provider" || got.completion.FinalPath != cleanPath {
 		t.Fatalf("completion=%+v", got.completion)
 	}
 
@@ -143,7 +146,7 @@ func TestRunCompletesAfterSuccessfulReleaseAndHandoff(t *testing.T) {
 	if err := json.Unmarshal(markerBytes, &args); err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{target}; !reflect.DeepEqual(args, want) {
+	if want := []string{cleanPath}; !reflect.DeepEqual(args, want) {
 		t.Fatalf("provider args=%q want=%q", args, want)
 	}
 	if err := os.WriteFile(cleanup, nil, 0o600); err != nil {
