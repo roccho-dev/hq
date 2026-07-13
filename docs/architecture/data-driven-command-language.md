@@ -34,10 +34,12 @@ checks, edit ranges, and declarative field binding.
 
 Each `hq.command.v1` row declares:
 
-- the human-facing command name and description;
+- the human-facing command name, aliases, keywords, and description;
 - the base canonical instruction object;
 - accepted fields and their primitive types;
-- required fields, enum values, examples, and descriptions;
+- required fields, enum values, explicit defaults, examples, pre-materialized
+  values, and descriptions;
+- complete labeled presets with a row-local preset ID and declared values;
 - the object path into which each accepted value is lowered.
 
 Adding a valid command row changes completion, diagnostics, and lowering
@@ -52,6 +54,8 @@ paths fail while loading the world.
 - Blank lines are allowed inside an object and do not delimit it.
 - Each non-empty field line is exactly `name=value`.
 - Completion is derived from the command object and field at the cursor.
+- An incomplete `@` line is a side-effect-free object query, not an unknown
+  command diagnostic; explicit submit still rejects it.
 - A confirmed command or field-key candidate replaces the complete current
   line; a value candidate replaces only the right side of `=`.
 - Diagnostics validate each object independently and reject non-empty field
@@ -67,6 +71,19 @@ paths fail while loading the world.
   history, registers, swap, undo files, or terminal history.
 - The managed worker observes only the canonical accepted queue, never the live
   Vim buffer or accepted-input presentation evidence.
+
+## Selected-world recall
+
+For a strict selected world, hq prepares a deterministic read-only projection
+once and emits versioned `hq.candidate.v1` records for `schema_template`,
+explicit `object_preset`, `missing_key`, and `field_value` edits. Recall uses
+normalized unordered query tokens with AND semantics and transports exact
+world/command identity, typed evidence, structured rank, and a mechanical edit.
+
+Legacy identity-free worlds retain local command/key/value completion and
+lowering, but cannot emit production recall candidates. Completion performs no
+provider, process, network, PATH, filesystem, accepted-history, queue, or
+execution lookup.
 
 The proof does not define or install a custom Tab mapping. Completion items use
 standard LSP `textEdit`; editor-specific acceptance UX remains an editor-client

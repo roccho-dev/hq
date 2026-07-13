@@ -168,3 +168,40 @@ func replaceJSONArray(row, start, end, replacement string) string {
 	endIndex += startIndex + len(start)
 	return row[:startIndex] + `"argv":` + replacement + row[endIndex+1:]
 }
+
+func TestCommandRecallVocabularyLoadsStrictly(t *testing.T) {
+	row := `{"kind":"hq.command.v1","name":"herdr.read","aliases":["agent.read"],"keywords":["reviewer"],"description":"read output","instruction":{"op":"run"},"fields":[{"name":"agent","type":"string","required":true,"examples":["reviewer"],"bind":"payload.agent"},{"name":"source","type":"enum","required":true,"enum":["screen"],"default":"screen","materialized_values":["screen"],"bind":"payload.source"},{"name":"lines","type":"integer","required":true,"default":100,"materialized_values":[50,200],"bind":"payload.lines"}],"presets":[{"id":"reviewer-screen","label":"Reviewer screen","values":{"agent":"reviewer","source":"screen","lines":100}}]}`
+	world, err := LoadSchemaJSONL(strings.NewReader(row))
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := world.Commands[0]
+	if len(command.Aliases) != 1 || len(command.Keywords) != 1 || len(command.Presets) != 1 {
+		t.Fatalf("command=%#v", command)
+	}
+	if command.Fields[1].Default == nil || command.Fields[1].Default.Text() != "screen" || len(command.Fields[2].MaterializedValues) != 2 {
+		t.Fatalf("fields=%#v", command.Fields)
+	}
+}
+
+func TestCommandRecallVocabularyFailsClosed(t *testing.T) {
+	basePrefix := `{"kind":"hq.command.v1","name":"bad","instruction":{},"fields":[`
+	baseSuffix := `]}`
+	cases := map[string]string{
+		"unknown command member":    `{"kind":"hq.command.v1","name":"bad","alias":["x"],"instruction":{}}`,
+		"unknown field member":      basePrefix + `{"name":"x","type":"string","bind":"payload.x","suggestions":["x"]}` + baseSuffix,
+		"duplicate alias":           `{"kind":"hq.command.v1","name":"bad","aliases":["x","x"],"instruction":{}}`,
+		"wrong typed default":       basePrefix + `{"name":"lines","type":"integer","default":"100","bind":"payload.lines"}` + baseSuffix,
+		"enum default outside enum": basePrefix + `{"name":"source","type":"enum","enum":["screen"],"default":"file","bind":"payload.source"}` + baseSuffix,
+		"preset missing required":   basePrefix + `{"name":"path","type":"path","required":true,"bind":"payload.path"}` + `],"presets":[{"id":"empty","label":"Empty","values":{}}]}`,
+		"preset unknown field":      basePrefix + `{"name":"path","type":"path","required":true,"bind":"payload.path"}` + `],"presets":[{"id":"bad","label":"Bad","values":{"path":"C:\\work","other":"x"}}]}`,
+		"non materializable value":  basePrefix + `{"name":"path","type":"path","required":true,"examples":["bad\"path"],"bind":"payload.path"}` + baseSuffix,
+	}
+	for name, row := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := LoadSchemaJSONL(strings.NewReader(row)); err == nil {
+				t.Fatalf("invalid row loaded: %s", row)
+			}
+		})
+	}
+}
