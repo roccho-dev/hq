@@ -13,12 +13,13 @@ type TextEdit struct {
 }
 
 type CompileDraft struct {
-	Kind        string         `json:"kind"`
-	Queue       string         `json:"queue"`
-	Key         string         `json:"key,omitempty"`
-	Value       any            `json:"value,omitempty"`
-	Instruction map[string]any `json:"instruction"`
-	Reason      string         `json:"reason,omitempty"`
+	Kind        string             `json:"kind"`
+	Queue       string             `json:"queue"`
+	Key         string             `json:"key,omitempty"`
+	Value       any                `json:"value,omitempty"`
+	Instruction map[string]any     `json:"instruction"`
+	Reason      string             `json:"reason,omitempty"`
+	Provenance  *CompileProvenance `json:"provenance,omitempty"`
 }
 
 type Suggestion struct {

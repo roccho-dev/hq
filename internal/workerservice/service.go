@@ -146,6 +146,11 @@ func processOnce(ctx context.Context, profile hqprofile.Profile) (string, error)
 	if closeErr != nil {
 		return StateSourceUnavailable, closeErr
 	}
+	world, err := loadProfileWorld(profile)
+	if err != nil {
+		return StateEvidenceInvalid, err
+	}
+	rows = validateSelectedWorldRows(rows, world)
 	prior, err := worker.LoadEventFile(profile.EventsPath)
 	if err != nil {
 		return StateEvidenceInvalid, err
@@ -157,7 +162,7 @@ func processOnce(ctx context.Context, profile hqprofile.Profile) (string, error)
 		}
 		return StateReady, nil
 	}
-	registry, err := loadRegistry(profile)
+	registry, err := loadRegistryForWorld(profile, world)
 	if err != nil {
 		return StateProviderUnavailable, err
 	}
@@ -187,7 +192,7 @@ func loadRegistry(profile hqprofile.Profile) (*adapter.Registry, error) {
 	if err != nil {
 		return nil, err
 	}
-	world, loadErr := current.LoadSchemaJSONL(worldFile)
+	world, loadErr := current.LoadRuntimeWorldJSONL(worldFile)
 	closeErr := worldFile.Close()
 	if loadErr != nil {
 		return nil, loadErr
