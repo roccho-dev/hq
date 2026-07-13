@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -20,6 +21,7 @@ const (
 	helperModeEnv    = "HQ_TEST_HOSTOPEN_HELPER"
 	helperMarkerEnv  = "HQ_TEST_HOSTOPEN_MARKER"
 	helperCleanupEnv = "HQ_TEST_HOSTOPEN_CLEANUP"
+	helperDoneEnv    = "HQ_TEST_HOSTOPEN_DONE"
 )
 
 func init() {
@@ -28,8 +30,9 @@ func init() {
 	}
 	marker := os.Getenv(helperMarkerEnv)
 	cleanup := os.Getenv(helperCleanupEnv)
+	done := os.Getenv(helperDoneEnv)
 	encoded, err := json.Marshal(os.Args[1:])
-	if err != nil || marker == "" || cleanup == "" {
+	if err != nil || marker == "" || cleanup == "" || done == "" {
 		os.Exit(70)
 	}
 	if err := os.WriteFile(marker, encoded, 0o600); err != nil {
@@ -38,12 +41,14 @@ func init() {
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(cleanup); err == nil {
-			// Model a GUI provider that completes handoff and later exits
+			// Model a GUI provider that completed handoff and later exits
 			// non-zero. host.open must not wait for this status.
+			_ = os.WriteFile(done, []byte("exiting-23"), 0o600)
 			os.Exit(23)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	_ = os.WriteFile(done, []byte("exiting-24"), 0o600)
 	os.Exit(24)
 }
 
@@ -56,11 +61,12 @@ func TestRunStartFailureRemainsProviderFailureBeforeLaunch(t *testing.T) {
 	}
 	marker := filepath.Join(root, "provider-started.json")
 	cleanup := filepath.Join(root, "provider-cleanup")
+	done := filepath.Join(root, "provider-done")
 	t.Setenv(helperModeEnv, "handoff")
 	t.Setenv(helperMarkerEnv, marker)
 	t.Setenv(helperCleanupEnv, cleanup)
+	t.Setenv(helperDoneEnv, done)
 	t.Setenv("PATH", t.TempDir())
-	t.Cleanup(func() { _ = os.WriteFile(cleanup, nil, 0o600) })
 
 	completion, err := a.Run(context.Background(), testRequest(t, target, filepath.Join(root, "missing-cwd")), nil)
 	if err == nil {
@@ -82,8 +88,9 @@ func TestRunStartFailureRemainsProviderFailureBeforeLaunch(t *testing.T) {
 }
 
 func TestRunCompletesAfterSuccessfulReleaseAndHandoff(t *testing.T) {
-	a := newTestAdapter(t)
 	root := t.TempDir()
+	helperExecutable := copyTestExecutable(t, root)
+	a := newTestAdapterForExecutable(t, helperExecutable)
 	target := filepath.Join(root, "target with spaces")
 	if err := os.Mkdir(target, 0o700); err != nil {
 		t.Fatal(err)
@@ -92,26 +99,27 @@ func TestRunCompletesAfterSuccessfulReleaseAndHandoff(t *testing.T) {
 	cleanPath := filepath.Clean(requestPath)
 	marker := filepath.Join(root, "provider-started.json")
 	cleanup := filepath.Join(root, "provider-cleanup")
+	done := filepath.Join(root, "provider-done")
 	t.Setenv(helperModeEnv, "handoff")
 	t.Setenv(helperMarkerEnv, marker)
 	t.Setenv(helperCleanupEnv, cleanup)
+	t.Setenv(helperDoneEnv, done)
 	t.Setenv("PATH", t.TempDir())
-	t.Cleanup(func() { _ = os.WriteFile(cleanup, nil, 0o600) })
 	request := testRequest(t, requestPath, root)
 
 	type outcome struct {
 		completion adapter.Completion
 		err        error
 	}
-	done := make(chan outcome, 1)
+	result := make(chan outcome, 1)
 	go func() {
 		completion, err := a.Run(context.Background(), request, nil)
-		done <- outcome{completion: completion, err: err}
+		result <- outcome{completion: completion, err: err}
 	}()
 
 	var got outcome
 	select {
-	case got = <-done:
+	case got = <-result:
 	case <-time.After(2 * time.Second):
 		t.Fatal("host.open waited for provider exit instead of releasing after launch")
 	}
@@ -122,22 +130,7 @@ func TestRunCompletesAfterSuccessfulReleaseAndHandoff(t *testing.T) {
 		t.Fatalf("completion=%+v", got.completion)
 	}
 
-	var markerBytes []byte
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		var err error
-		markerBytes, err = os.ReadFile(marker)
-		if err == nil {
-			break
-		}
-		if !errors.Is(err, os.ErrNotExist) {
-			t.Fatal(err)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if markerBytes == nil {
-		t.Fatal("released provider did not complete its launch handoff")
-	}
+	markerBytes := waitReadFile(t, marker, 2*time.Second)
 	var args []string
 	if err := json.Unmarshal(markerBytes, &args); err != nil {
 		t.Fatal(err)
@@ -148,6 +141,10 @@ func TestRunCompletesAfterSuccessfulReleaseAndHandoff(t *testing.T) {
 	if err := os.WriteFile(cleanup, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if got := string(waitReadFile(t, done, 2*time.Second)); got != "exiting-23" {
+		t.Fatalf("helper completion=%q", got)
+	}
+	waitRemoveFile(t, helperExecutable, 2*time.Second)
 }
 
 func TestRunRejectsCancellationBeforeEffect(t *testing.T) {
@@ -159,10 +156,11 @@ func TestRunRejectsCancellationBeforeEffect(t *testing.T) {
 	}
 	marker := filepath.Join(root, "provider-started.json")
 	cleanup := filepath.Join(root, "provider-cleanup")
+	done := filepath.Join(root, "provider-done")
 	t.Setenv(helperModeEnv, "handoff")
 	t.Setenv(helperMarkerEnv, marker)
 	t.Setenv(helperCleanupEnv, cleanup)
-	t.Cleanup(func() { _ = os.WriteFile(cleanup, nil, 0o600) })
+	t.Setenv(helperDoneEnv, done)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := a.Run(ctx, testRequest(t, target, root), nil); !errors.Is(err, context.Canceled) {
@@ -179,6 +177,11 @@ func newTestAdapter(t *testing.T) *Adapter {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return newTestAdapterForExecutable(t, executable)
+}
+
+func newTestAdapterForExecutable(t *testing.T, executable string) *Adapter {
+	t.Helper()
 	providerBytes, err := os.ReadFile(executable)
 	if err != nil {
 		t.Fatal(err)
@@ -199,6 +202,62 @@ func newTestAdapter(t *testing.T) *Adapter {
 		t.Fatal(err)
 	}
 	return a
+}
+
+func copyTestExecutable(t *testing.T, root string) string {
+	t.Helper()
+	source, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(root, "hostopen-helper"+filepath.Ext(source))
+	input, err := os.Open(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	output, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o700)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.Copy(output, input); err != nil {
+		_ = output.Close()
+		t.Fatal(err)
+	}
+	if err := output.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return destination
+}
+
+func waitReadFile(t *testing.T, path string, timeout time.Duration) []byte {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			return data
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", path)
+	return nil
+}
+
+func waitRemoveFile(t *testing.T, path string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		err := os.Remove(path)
+		if err == nil || errors.Is(err, os.ErrNotExist) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for helper exit: %s", path)
 }
 
 func testRequest(t *testing.T, path, cwd string) adapter.Request {
