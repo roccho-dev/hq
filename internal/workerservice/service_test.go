@@ -82,9 +82,15 @@ func TestServeAutomaticallyProcessesAcceptedHostIntentWithExactProvider(t *testi
 	if err := os.WriteFile(acceptedPath, append(acceptedBytes, '\n'), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	worldPath := filepath.Join(root, "world.jsonl")
+	world := `{"kind":"hq.world.v1","world_id":"world.host-test"}` + "\n" +
+		`{"kind":"hq.command.v1","command_id":"host.open","command_version":"1","name":"host.open","instruction":{"version":"instruction.v1","op":"run","target":"host","payload":{"capability":"host.open"}},"fields":[{"name":"path","type":"path","required":true,"bind":"payload.path"}]}` + "\n"
+	if err := os.WriteFile(worldPath, []byte(world), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	eventsPath := filepath.Join(eventDir, "events.jsonl")
 	profile := hqprofile.Profile{
-		Name: "local", DeploymentID: "dep-test", AcceptedPath: acceptedPath,
+		Name: "local", DeploymentID: "dep-test", WorldPath: worldPath, AcceptedPath: acceptedPath,
 		WorkspaceRoot: workspace, EventsPath: eventsPath, CapabilitiesPath: capabilitiesPath,
 		PollIntervalMS: 20, HealthTimeoutMS: 500,
 	}
@@ -127,7 +133,7 @@ func TestServeAutomaticallyProcessesAcceptedHostIntentWithExactProvider(t *testi
 		time.Sleep(20 * time.Millisecond)
 		health = HealthCheck(profile, time.Now())
 	}
-	if !health.Ready || health.State != StateReady {
+	if !health.Ready || health.State != StateReady || health.Kind != HealthKind || health.SelectedWorld == nil || health.SelectedWorld.WorldID != "world.host-test" {
 		cancel()
 		t.Fatalf("health=%+v", health)
 	}

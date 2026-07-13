@@ -4,34 +4,45 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"hq/internal/atomicfile"
+	"hq/internal/core"
 	"hq/internal/workersafety"
 )
 
-const HeartbeatKind = "worker.heartbeat.v1"
+const (
+	HeartbeatKindV1 = "worker.heartbeat.v1"
+	HeartbeatKindV2 = "worker.heartbeat.v2"
+	HeartbeatKind   = HeartbeatKindV2
+)
 const heartbeatName = "heartbeat.json"
 
 type Heartbeat struct {
-	Kind         string    `json:"kind"`
-	ClaimID      string    `json:"claim_id"`
-	WorkerID     string    `json:"worker_id"`
-	Workspace    string    `json:"workspace"`
-	DeploymentID string    `json:"deployment_id"`
-	Profile      string    `json:"profile"`
-	State        string    `json:"state"`
-	ObservedAt   time.Time `json:"observed_at"`
+	Kind          string         `json:"kind"`
+	ClaimID       string         `json:"claim_id"`
+	WorkerID      string         `json:"worker_id"`
+	Workspace     string         `json:"workspace"`
+	DeploymentID  string         `json:"deployment_id"`
+	Profile       string         `json:"profile"`
+	State         string         `json:"state"`
+	SelectedWorld *core.WorldRef `json:"selected_world,omitempty"`
+	ObservedAt    time.Time      `json:"observed_at"`
 }
 
-func (c *Claim) WriteHeartbeat(deploymentID, profile, state string, now time.Time) (Heartbeat, error) {
+func (c *Claim) WriteHeartbeat(deploymentID, profile, state string, selectedWorld core.WorldRef, now time.Time) (Heartbeat, error) {
 	if c == nil || c.path == "" {
 		return Heartbeat{}, errors.New("claim is not initialized")
 	}
 	if strings.TrimSpace(deploymentID) == "" || strings.TrimSpace(profile) == "" || strings.TrimSpace(state) == "" {
 		return Heartbeat{}, errors.New("heartbeat deployment, profile, and state are required")
+	}
+	if !core.ValidWorldRef(selectedWorld) {
+		return Heartbeat{}, errors.New("heartbeat selected_world is invalid")
 	}
 	current, err := readOwner(c.path)
 	if err != nil {
@@ -40,10 +51,16 @@ func (c *Claim) WriteHeartbeat(deploymentID, profile, state string, now time.Tim
 	if current.ClaimID != c.owner.ClaimID || current.WorkerID != c.owner.WorkerID || current.Workspace != c.owner.Workspace {
 		return Heartbeat{}, errors.New("claim identity changed; refusing heartbeat")
 	}
-	record := Heartbeat{Kind: HeartbeatKind, ClaimID: current.ClaimID, WorkerID: current.WorkerID, Workspace: current.Workspace, DeploymentID: deploymentID, Profile: profile, State: state, ObservedAt: now.UTC()}
+	record := Heartbeat{Kind: HeartbeatKind, ClaimID: current.ClaimID, WorkerID: current.WorkerID, Workspace: current.Workspace, DeploymentID: deploymentID, Profile: profile, State: state, SelectedWorld: &selectedWorld, ObservedAt: now.UTC()}
 	path := filepath.Join(filepath.Dir(c.path), heartbeatName)
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	file, err := os.CreateTemp(filepath.Dir(path), ".heartbeat-*.tmp")
 	if err != nil {
+		return Heartbeat{}, err
+	}
+	temporary := file.Name()
+	defer os.Remove(temporary)
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
 		return Heartbeat{}, err
 	}
 	encoder := json.NewEncoder(file)
@@ -59,6 +76,9 @@ func (c *Claim) WriteHeartbeat(deploymentID, profile, state string, now time.Tim
 	if closeErr != nil {
 		return Heartbeat{}, closeErr
 	}
+	if err := atomicfile.Replace(temporary, path); err != nil {
+		return Heartbeat{}, err
+	}
 	return record, nil
 }
 
@@ -71,7 +91,7 @@ func ReadHeartbeat(projectRoot string) (Heartbeat, error) {
 	if err != nil {
 		return Heartbeat{}, err
 	}
-	file, err := os.Open(filepath.Join(layout.ArtifactRoot, "worker", heartbeatName))
+	file, err := atomicfile.OpenRead(filepath.Join(layout.ArtifactRoot, "worker", heartbeatName))
 	if err != nil {
 		return Heartbeat{}, err
 	}
@@ -82,8 +102,27 @@ func ReadHeartbeat(projectRoot string) (Heartbeat, error) {
 	if err := decoder.Decode(&record); err != nil {
 		return Heartbeat{}, err
 	}
-	if record.Kind != HeartbeatKind || strings.TrimSpace(record.ClaimID) == "" || strings.TrimSpace(record.WorkerID) == "" || strings.TrimSpace(record.Workspace) == "" || strings.TrimSpace(record.DeploymentID) == "" || strings.TrimSpace(record.Profile) == "" || strings.TrimSpace(record.State) == "" || record.ObservedAt.IsZero() {
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return Heartbeat{}, errors.New("heartbeat contains multiple JSON values")
+		}
+		return Heartbeat{}, err
+	}
+	if strings.TrimSpace(record.ClaimID) == "" || strings.TrimSpace(record.WorkerID) == "" || strings.TrimSpace(record.Workspace) == "" || strings.TrimSpace(record.DeploymentID) == "" || strings.TrimSpace(record.Profile) == "" || strings.TrimSpace(record.State) == "" || record.ObservedAt.IsZero() {
 		return Heartbeat{}, errors.New("invalid worker heartbeat")
+	}
+	switch record.Kind {
+	case HeartbeatKindV1:
+		if record.SelectedWorld != nil {
+			return Heartbeat{}, errors.New("legacy worker heartbeat must not declare selected_world")
+		}
+	case HeartbeatKindV2:
+		if record.SelectedWorld == nil || !core.ValidWorldRef(*record.SelectedWorld) {
+			return Heartbeat{}, errors.New("worker heartbeat v2 requires valid selected_world")
+		}
+	default:
+		return Heartbeat{}, errors.New("invalid worker heartbeat kind")
 	}
 	return record, nil
 }

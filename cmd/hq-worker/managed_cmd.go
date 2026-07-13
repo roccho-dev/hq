@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"time"
@@ -107,14 +108,18 @@ func runManagedServe(args []string) int {
 }
 
 func runManagedHealth(args []string) int {
+	return runManagedHealthTo(args, os.Stdout, os.Stderr)
+}
+
+func runManagedHealthTo(args []string, stdout, stderr io.Writer) int {
 	profile, err := managedProfileFlags("hq-worker health", args)
 	if err != nil {
-		writeCommandError(os.Stderr, "profile_invalid", err.Error())
+		writeCommandError(stderr, "profile_invalid", err.Error())
 		return 2
 	}
 	report := workerservice.HealthCheck(profile, time.Now())
-	if err := worker.EncodeJSONLine(os.Stdout, report); err != nil {
-		writeCommandError(os.Stderr, "output_failed", err.Error())
+	if err := worker.EncodeJSONLine(stdout, report); err != nil {
+		writeCommandError(stderr, "output_failed", err.Error())
 		return 1
 	}
 	if !report.Ready {

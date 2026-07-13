@@ -19,11 +19,13 @@ import (
 	"hq/internal/core"
 	"hq/internal/hq"
 	"hq/internal/hqprofile"
+	"hq/internal/selectedworld"
 )
 
 const (
 	SubmitResultKind     = "hq.submitResult.v1"
 	DraftConsumptionKind = "hq.draftConsumption.v1"
+	RuntimeSelectionKind = "hq.runtimeSelection.v1"
 )
 
 type document struct {
@@ -32,27 +34,28 @@ type document struct {
 }
 
 type Server struct {
-	profile   hqprofile.Profile
-	world     *hq.JsonlWorld
-	recall    *core.WorldRecallIndex
-	documents map[string]document
+	profile       hqprofile.Profile
+	world         *hq.JsonlWorld
+	recall        *core.WorldRecallIndex
+	selectedWorld hq.WorldRef
+	selected      bool
+	documents     map[string]document
 }
 
 func New(profile hqprofile.Profile) (*Server, error) {
-	file, err := os.Open(profile.WorldPath)
-	if err != nil {
-		return nil, fmt.Errorf("open profile world: %w", err)
-	}
-	defer file.Close()
-	world, err := hq.LoadSchemaJSONL(file)
+	selection, err := selectedworld.LoadRuntime(profile.WorldPath)
 	if err != nil {
 		return nil, fmt.Errorf("load profile world: %w", err)
 	}
-	recall, err := hq.PrepareWorldRecall(world)
+	recall, err := hq.PrepareWorldRecall(selection.World)
 	if err != nil {
 		return nil, fmt.Errorf("prepare profile world recall: %w", err)
 	}
-	return &Server{profile: profile, world: world, recall: recall, documents: map[string]document{}}, nil
+	return &Server{
+		profile: profile, world: selection.World, recall: recall,
+		selectedWorld: selection.Ref, selected: selection.Selected,
+		documents: map[string]document{},
+	}, nil
 }
 
 func (s *Server) Serve(r io.Reader, w io.Writer) error {
@@ -77,14 +80,22 @@ func (s *Server) Serve(r io.Reader, w io.Writer) error {
 func (s *Server) handle(w io.Writer, msg message) error {
 	switch msg.Method {
 	case "initialize":
+		capabilities := map[string]any{
+			"textDocumentSync":       1,
+			"completionProvider":     map[string]any{"triggerCharacters": []string{"@", "{", "\"", ":", ",", ".", " ", "="}},
+			"codeActionProvider":     true,
+			"executeCommandProvider": map[string]any{"commands": []string{"hq.submit"}},
+		}
+		if s.selected {
+			capabilities["experimental"] = map[string]any{"hq": map[string]any{
+				"kind": RuntimeSelectionKind, "runtime": "lsp",
+				"profile": s.profile.Name, "deployment_id": s.profile.DeploymentID,
+				"world": s.selectedWorld,
+			}}
+		}
 		return writeMessage(w, message{JSONRPC: "2.0", ID: msg.ID, Result: map[string]any{
-			"capabilities": map[string]any{
-				"textDocumentSync":       1,
-				"completionProvider":     map[string]any{"triggerCharacters": []string{"@", "{", "\"", ":", ",", ".", " ", "="}},
-				"codeActionProvider":     true,
-				"executeCommandProvider": map[string]any{"commands": []string{"hq.submit"}},
-			},
-			"serverInfo": map[string]any{"name": "hq", "version": "1"},
+			"capabilities": capabilities,
+			"serverInfo":   map[string]any{"name": "hq", "version": "1"},
 		}})
 	case "initialized":
 		return nil

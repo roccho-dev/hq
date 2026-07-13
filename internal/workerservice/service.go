@@ -11,11 +11,9 @@ import (
 	"sort"
 	"time"
 
-	"hq/internal/adapter/current"
 	"hq/internal/capability"
 	"hq/internal/core"
 	"hq/internal/hqprofile"
-	"hq/internal/localtool"
 	"hq/internal/worker"
 	"hq/internal/worker/adapter"
 	"hq/internal/worker/hostopen"
@@ -24,7 +22,7 @@ import (
 )
 
 const LifecycleKind = "hq.workerLifecycle.v1"
-const HealthKind = "hq.workerHealth.v1"
+const HealthKind = "hq.workerHealth.v2"
 
 const (
 	StateReady               = "configured_ready"
@@ -48,18 +46,23 @@ type Lifecycle struct {
 }
 
 type Health struct {
-	Kind         string    `json:"kind"`
-	State        string    `json:"state"`
-	Ready        bool      `json:"ready"`
-	Profile      string    `json:"profile"`
-	DeploymentID string    `json:"deployment_id,omitempty"`
-	WorkerID     string    `json:"worker_id,omitempty"`
-	ClaimID      string    `json:"claim_id,omitempty"`
-	ObservedAt   time.Time `json:"observed_at"`
-	Message      string    `json:"message,omitempty"`
+	Kind          string         `json:"kind"`
+	State         string         `json:"state"`
+	Ready         bool           `json:"ready"`
+	Profile       string         `json:"profile"`
+	DeploymentID  string         `json:"deployment_id,omitempty"`
+	WorkerID      string         `json:"worker_id,omitempty"`
+	ClaimID       string         `json:"claim_id,omitempty"`
+	SelectedWorld *core.WorldRef `json:"selected_world,omitempty"`
+	ObservedAt    time.Time      `json:"observed_at"`
+	Message       string         `json:"message,omitempty"`
 }
 
 func Serve(ctx context.Context, profile hqprofile.Profile, workerID string, out io.Writer) error {
+	selection, err := loadProfileSelection(profile)
+	if err != nil {
+		return err
+	}
 	claim, err := workerclaim.Acquire(profile.WorkspaceRoot, workerID, time.Now())
 	if err != nil {
 		return err
@@ -75,8 +78,8 @@ func Serve(ctx context.Context, profile hqprofile.Profile, workerID string, out 
 	ticker := time.NewTicker(profile.PollInterval())
 	defer ticker.Stop()
 	for {
-		state, processErr := processOnce(ctx, profile)
-		if _, heartbeatErr := claim.WriteHeartbeat(profile.DeploymentID, profile.Name, state, time.Now()); heartbeatErr != nil {
+		state, processErr := processOnceSelected(ctx, profile, selection.World)
+		if _, heartbeatErr := claim.WriteHeartbeat(profile.DeploymentID, profile.Name, state, selection.Ref, time.Now()); heartbeatErr != nil {
 			return heartbeatErr
 		}
 		if processErr != nil {
@@ -97,6 +100,11 @@ func Serve(ctx context.Context, profile hqprofile.Profile, workerID string, out 
 
 func HealthCheck(profile hqprofile.Profile, now time.Time) Health {
 	report := Health{Kind: HealthKind, State: StateNotConfigured, Profile: profile.Name, DeploymentID: profile.DeploymentID, ObservedAt: now.UTC()}
+	selection, err := loadProfileSelection(profile)
+	if err != nil {
+		report.State, report.Message = StateEvidenceInvalid, err.Error()
+		return report
+	}
 	inspection, err := workerclaim.Inspect(profile.WorkspaceRoot, now, profile.HealthTimeout())
 	if err != nil {
 		report.State, report.Message = StateEvidenceInvalid, err.Error()
@@ -116,11 +124,31 @@ func HealthCheck(profile hqprofile.Profile, now time.Time) Health {
 		report.State, report.Message = StateStale, "managed worker heartbeat is missing or stale"
 		return report
 	}
+	if heartbeat.Kind != workerclaim.HeartbeatKindV2 {
+		report.State, report.Message = StateEvidenceInvalid, "legacy worker heartbeat cannot prove selected-world readiness"
+		return report
+	}
 	if heartbeat.DeploymentID != profile.DeploymentID || heartbeat.Profile != profile.Name {
 		report.State, report.Message = StateEvidenceInvalid, "worker heartbeat deployment/profile mismatch"
 		return report
 	}
-	if _, err := loadRegistry(profile); err != nil {
+	if heartbeat.SelectedWorld == nil || *heartbeat.SelectedWorld != selection.Ref {
+		report.State, report.Message = StateEvidenceInvalid, "worker heartbeat selected-world mismatch"
+		return report
+	}
+	matched := selection.Ref
+	report.SelectedWorld = &matched
+	if heartbeat.State != StateReady {
+		switch heartbeat.State {
+		case StateNotConfigured, StateSourceUnavailable, StateEvidenceInvalid, StateProviderUnavailable, StateStale, StateReconciliation:
+			report.State = heartbeat.State
+		default:
+			report.State = StateEvidenceInvalid
+		}
+		report.Message = "managed worker heartbeat is not ready: " + heartbeat.State
+		return report
+	}
+	if _, err := loadRegistryForWorld(profile, selection.World); err != nil {
 		report.State, report.Message = StateProviderUnavailable, err.Error()
 		return report
 	}
@@ -129,7 +157,7 @@ func HealthCheck(profile hqprofile.Profile, now time.Time) Health {
 		report.State, report.Message = StateEvidenceInvalid, err.Error()
 		return report
 	}
-	if hasReconciliation(data.Results) || heartbeat.State == StateReconciliation {
+	if hasReconciliation(data.Results) {
 		report.State, report.Message = StateReconciliation, "one or more runs require typed reconciliation"
 		return report
 	}
@@ -138,6 +166,14 @@ func HealthCheck(profile hqprofile.Profile, now time.Time) Health {
 }
 
 func processOnce(ctx context.Context, profile hqprofile.Profile) (string, error) {
+	selection, err := loadProfileSelection(profile)
+	if err != nil {
+		return StateEvidenceInvalid, err
+	}
+	return processOnceSelected(ctx, profile, selection.World)
+}
+
+func processOnceSelected(ctx context.Context, profile hqprofile.Profile, world *core.JsonlWorld) (string, error) {
 	file, err := os.Open(profile.AcceptedPath)
 	if err != nil {
 		return StateSourceUnavailable, err
@@ -149,10 +185,6 @@ func processOnce(ctx context.Context, profile hqprofile.Profile) (string, error)
 	}
 	if closeErr != nil {
 		return StateSourceUnavailable, closeErr
-	}
-	world, err := loadProfileWorld(profile)
-	if err != nil {
-		return StateEvidenceInvalid, err
 	}
 	rows = validateSelectedWorldRows(rows, world)
 	prior, err := worker.LoadEventFile(profile.EventsPath)
@@ -186,42 +218,6 @@ func processOnce(ctx context.Context, profile hqprofile.Profile) (string, error)
 		return StateReconciliation, nil
 	}
 	return StateReady, nil
-}
-
-func loadRegistry(profile hqprofile.Profile) (*adapter.Registry, error) {
-	if profile.WorldPath == "" {
-		return hostRegistry(profile)
-	}
-	worldFile, err := os.Open(profile.WorldPath)
-	if err != nil {
-		return nil, err
-	}
-	world, loadErr := current.LoadRuntimeWorldJSONL(worldFile)
-	closeErr := worldFile.Close()
-	if loadErr != nil {
-		return nil, loadErr
-	}
-	if closeErr != nil {
-		return nil, closeErr
-	}
-	registrations := []adapter.Registration{}
-	if worldSelectsTarget(world, "host") {
-		if profile.CapabilitiesPath == "" {
-			return nil, errors.New("selected world declares host commands but profile has no capabilities_path")
-		}
-		host, err := hostRegistration(profile)
-		if err != nil {
-			return nil, err
-		}
-		registrations = append(registrations, host)
-	}
-	if len(world.LocalTools) != 0 {
-		if profile.ExecutableBindingsPath == "" {
-			return nil, errors.New("selected world declares local tools but profile has no executable_bindings_path")
-		}
-		registrations = append(registrations, adapter.Registration{Target: "local-tool", Preparer: localtool.Preparer{World: world, BindingsPath: profile.ExecutableBindingsPath}})
-	}
-	return adapter.NewRegistry(registrations...)
 }
 
 func hostRegistry(profile hqprofile.Profile) (*adapter.Registry, error) {

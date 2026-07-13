@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"hq/internal/atomicfile"
 	"hq/internal/hqprofile"
 	"hq/internal/workerclaim"
 	"hq/internal/workersafety"
@@ -328,7 +329,7 @@ func readStopReceipt(path string) (StopReceipt, error) {
 }
 
 func readStrictJSON(path string, target any) error {
-	file, err := os.Open(path)
+	file, err := atomicfile.OpenRead(path)
 	if err != nil {
 		return err
 	}
@@ -375,7 +376,7 @@ func writeJSONAtomic(path string, value any) error {
 	if closeErr != nil {
 		return closeErr
 	}
-	return os.Rename(temporaryPath, path)
+	return atomicfile.Replace(temporaryPath, path)
 }
 
 func canonicalControlWorkspace(root string) (string, error) {
