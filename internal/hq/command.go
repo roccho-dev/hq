@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"hq/internal/core"
 )
 
 type CommandDiagnostic struct {
@@ -29,30 +31,29 @@ type commandObject struct {
 	FieldLines map[string]int
 }
 
-func commandSuggestions(buffer string, cursor int, world *JsonlWorld) []Suggestion {
+func commandSuggestions(buffer string, cursor, documentVersion int, world *JsonlWorld, recall *core.WorldRecallIndex) []Suggestion {
 	lines := documentLines(buffer)
 	lineIndex, localCursor := lineAtOffset(lines, cursor)
 	line := lines[lineIndex]
 	before := line.Text[:min(localCursor, len(line.Text))]
 	trimmed := strings.TrimSpace(before)
 
-	if strings.HasPrefix(trimmed, "@") || !hasCommandHeaderAtOrBefore(lines, lineIndex) {
-		partial := strings.TrimSpace(strings.TrimPrefix(trimmed, "@"))
-		out := []Suggestion{}
-		for _, command := range world.Commands {
-			if partial != "" && !match(command.Name, partial) {
-				continue
+	if strings.HasPrefix(trimmed, "@") {
+		name := strings.TrimSpace(strings.TrimPrefix(trimmed, "@"))
+		if _, exact := world.Command(name); !exact {
+			if recall != nil {
+				return recallSuggestions(recall, recall.Recall(core.WorldRecallQuery{
+					Scope: core.WorldRecallObjectQuery, Text: trimmed,
+				}), line.Start, line.Start+len(line.Text), trimmed, documentVersion)
 			}
-			insert := "@" + command.Name
-			out = append(out, Suggestion{
-				Label: command.Name, InsertText: insert, Detail: "hq command object",
-				Description: command.Description, Tag: "command", Score: 100,
-				Edit:  TextEdit{Start: line.Start, End: line.Start + len(line.Text), Text: insert},
-				Draft: CompileDraft{Kind: "candidate.command", Queue: "instruction.jsonl", Reason: "command declared by profile world"},
-			})
+			return commandNameSuggestions(world, name, line)
 		}
-		sortSuggestions(out)
-		return out
+		return nil
+	}
+
+	if !hasCommandHeaderAtOrBefore(lines, lineIndex) {
+		partial := strings.TrimSpace(strings.TrimPrefix(trimmed, "@"))
+		return commandNameSuggestions(world, partial, line)
 	}
 
 	object, err := parseCommandObjectIgnoring(lines, lineIndex, lineIndex)
@@ -70,48 +71,186 @@ func commandSuggestions(buffer string, cursor int, world *JsonlWorld) []Suggesti
 		if !ok {
 			return nil
 		}
-		values := field.Enum
-		if len(values) == 0 {
-			values = field.Examples
-		}
-		out := []Suggestion{}
 		valueStart := line.Start + strings.Index(line.Text, "=") + 1
 		clean := strings.Trim(strings.TrimSpace(partial), "\"")
-		for _, value := range values {
-			if clean != "" && !match(value, clean) {
-				continue
-			}
-			insert := quoteCommandValue(value)
-			out = append(out, Suggestion{
-				Label: value, InsertText: insert, Detail: field.Type,
-				Description: field.Description, Tag: "command value", Score: 80,
-				Edit:  TextEdit{Start: valueStart, End: line.Start + len(line.Text), Text: insert},
-				Draft: CompileDraft{Kind: "candidate.commandValue", Queue: "instruction.jsonl", Key: field.Name, Value: value, Reason: "value declared by profile world"},
-			})
+		if recall != nil {
+			return recallSuggestions(recall, recall.Recall(core.WorldRecallQuery{
+				Scope: core.WorldRecallFieldValue, Text: clean,
+				CommandName: definition.Name, FieldName: field.Name,
+			}), valueStart, line.Start+len(line.Text), strings.TrimSpace(partial), documentVersion)
 		}
-		sortSuggestions(out)
-		return out
+		return commandValueSuggestions(field, clean, valueStart, line.Start+len(line.Text))
 	}
 
 	partial := strings.TrimSpace(active)
+	present := map[string]bool{}
+	for field, existingLine := range object.FieldLines {
+		if existingLine != lineIndex {
+			present[field] = true
+		}
+	}
+	if recall != nil {
+		return recallSuggestions(recall, recall.Recall(core.WorldRecallQuery{
+			Scope: core.WorldRecallMissingKey, Text: partial,
+			CommandName: definition.Name, PresentFields: present,
+		}), line.Start, line.Start+len(line.Text), partial, documentVersion)
+	}
+	return commandFieldSuggestions(definition, present, partial, line.Start, line.Start+len(line.Text))
+}
+
+func commandNameSuggestions(world *JsonlWorld, partial string, line documentLine) []Suggestion {
 	out := []Suggestion{}
-	for _, field := range definition.Fields {
-		if existingLine, used := object.FieldLines[field.Name]; used && existingLine != lineIndex {
+	for _, command := range world.Commands {
+		if partial != "" && !match(command.Name, partial) {
 			continue
 		}
-		if partial != "" && !match(field.Name, partial) {
+		insert := "@" + command.Name
+		out = append(out, Suggestion{
+			Label: command.Name, InsertText: insert, Detail: "hq command object",
+			Description: command.Description, Tag: "command", Score: 100,
+			Edit:  TextEdit{Start: line.Start, End: line.Start + len(line.Text), Text: insert},
+			Draft: CompileDraft{Kind: "candidate.command", Queue: "instruction.jsonl", Reason: "command declared by profile world"},
+		})
+	}
+	sortSuggestions(out)
+	return out
+}
+
+func commandFieldSuggestions(command CommandDefinition, present map[string]bool, partial string, start, end int) []Suggestion {
+	out := []Suggestion{}
+	for _, field := range command.Fields {
+		if present[field.Name] || (partial != "" && !match(field.Name, partial)) {
 			continue
 		}
 		insert := field.Name + "="
 		out = append(out, Suggestion{
 			Label: field.Name, InsertText: insert, Detail: field.Type,
 			Description: field.Description, Tag: "command field", Score: fieldScore(field),
-			Edit:  TextEdit{Start: line.Start, End: line.Start + len(line.Text), Text: insert},
-			Draft: CompileDraft{Kind: "candidate.commandField", Queue: "instruction.jsonl", Key: field.Name, Reason: "field declared by profile world"},
+			Edit:  TextEdit{Start: start, End: end, Text: insert},
+			Draft: CompileDraft{Kind: "candidate.command-field", Queue: "instruction.jsonl", Key: field.Name, Reason: "field declared by profile world"},
 		})
 	}
 	sortSuggestions(out)
 	return out
+}
+
+func commandValueSuggestions(field CommandField, partial string, start, end int) []Suggestion {
+	out := []Suggestion{}
+	for _, value := range field.Enum {
+		if partial != "" && !match(value, partial) {
+			continue
+		}
+		insert := quoteCommandValue(value)
+		out = append(out, Suggestion{
+			Label: value, InsertText: insert, Detail: "value for " + field.Name,
+			Description: field.Description, Tag: "command value", Score: 100,
+			Edit:  TextEdit{Start: start, End: end, Text: insert},
+			Draft: CompileDraft{Kind: "candidate.command-value", Queue: "instruction.jsonl", Key: field.Name, Value: value, Reason: "value declared by profile world"},
+		})
+	}
+	sortSuggestions(out)
+	return out
+}
+
+// IsMutableWorldRecall reports selected-world query scopes independently of
+// whether the current token happens to match a candidate.
+func IsMutableWorldRecall(buffer string, cursor int, world *JsonlWorld) bool {
+	if world == nil || len(world.Commands) == 0 {
+		return false
+	}
+	if _, selected := world.SelectedRef(); !selected {
+		return false
+	}
+	lines := documentLines(buffer)
+	lineIndex, localCursor := lineAtOffset(lines, cursor)
+	line := lines[lineIndex]
+	before := line.Text[:min(localCursor, len(line.Text))]
+	trimmed := strings.TrimSpace(before)
+	if strings.HasPrefix(trimmed, "@") {
+		name := strings.TrimSpace(strings.TrimPrefix(trimmed, "@"))
+		_, exact := world.Command(name)
+		return !exact
+	}
+	if !hasCommandHeaderAtOrBefore(lines, lineIndex) {
+		return false
+	}
+	object, err := parseCommandObjectIgnoring(lines, lineIndex, lineIndex)
+	if err != nil {
+		return false
+	}
+	_, exact := world.Command(object.Name)
+	return exact && lineIndex != object.StartLine
+}
+
+func recallSuggestions(recall *core.WorldRecallIndex, results []core.WorldRecallResult, start, end int, clientPrefix string, documentVersion int) []Suggestion {
+	out := make([]Suggestion, 0, len(results))
+	mechanicalPrefix := recallCurrentToken(clientPrefix)
+	for _, result := range results {
+		edit := TextEdit{Start: start, End: end, Text: result.Materialization}
+		candidate := candidateRecord(recall.ID(), documentVersion, result, edit)
+		out = append(out, Suggestion{
+			Label: result.Label, InsertText: result.Materialization,
+			Detail: result.Detail, Description: result.Documentation,
+			Documentation: result.Documentation, Tag: string(result.Kind),
+			Edit:       edit,
+			SortText:   recallSortText(result.Rank, result.CandidateID),
+			FilterText: strings.TrimSpace(mechanicalPrefix + " " + result.Label),
+			Candidate:  &candidate,
+		})
+	}
+	return out
+}
+
+func candidateRecord(indexID string, documentVersion int, result core.WorldRecallResult, edit TextEdit) Candidate {
+	matches := make([]CandidateMatch, len(result.Matches))
+	for index, match := range result.Matches {
+		ref := CandidateSourceRef{TermKind: match.TermKind, TermPath: match.TermPath}
+		matches[index] = CandidateMatch{
+			Token: match.Token, TermKind: match.TermKind, TermPath: match.TermPath,
+			Class: match.Class, Positions: append([]int(nil), match.Positions...),
+			PrimitiveScore: match.PrimitiveScore, SourceRef: ref,
+		}
+	}
+	return Candidate{
+		Kind: CandidateKind, CandidateID: result.CandidateID, IndexID: indexID,
+		DocumentVersion: documentVersion, Scope: result.Scope, CandidateKind: result.Kind,
+		Label: result.Label, Detail: result.Detail, Documentation: result.Documentation,
+		World: result.World, Command: result.Command,
+		SourceRefs: candidateSourceRefs(result.StructuralRefs), Matches: matches,
+		Rank: candidateRank(result.Rank),
+		Edit: CandidateEdit{StartByte: edit.Start, EndByte: edit.End, NewText: edit.Text},
+	}
+}
+
+func recallCurrentToken(input string) string {
+	fields := strings.Fields(input)
+	if len(fields) == 0 {
+		return ""
+	}
+	token := strings.TrimPrefix(fields[len(fields)-1], "@")
+	return strings.Trim(token, "\"")
+}
+
+func recallSortText(rank core.WorldRecallRank, candidateID string) string {
+	values := []struct {
+		value      int
+		descending bool
+	}{
+		{rank.ScopeCompatibility, false}, {rank.WorstClass, false},
+		{rank.ExactCount, true}, {rank.PrefixCount, true},
+		{rank.SubstringCount, true}, {rank.DirectCount, true},
+		{rank.SubsequenceScore, true}, {rank.RequiredPreference, true},
+		{rank.CandidateKind, false},
+	}
+	parts := make([]string, len(values))
+	for index, value := range values {
+		encoded := uint64(int64(value.value)) ^ (uint64(1) << 63)
+		if value.descending {
+			encoded = ^encoded
+		}
+		parts[index] = fmt.Sprintf("%016x", encoded)
+	}
+	return "rank-" + strings.Join(parts, "-") + "-" + candidateID
 }
 
 // CompileCommandObject lowers the @command object containing cursorLine. The
@@ -189,12 +328,35 @@ func ValidateCommandDocument(text string, world *JsonlWorld) []CommandDiagnostic
 			continue
 		}
 		end := nextCommandHeader(lines, index+1)
+		queryName := strings.TrimSpace(strings.TrimPrefix(trimmed, "@"))
+		if _, exact := world.Command(queryName); !exact {
+			// Only a header-only query is disposable editing state. Once it has
+			// body lines it looks like an attempted object and must fail closed.
+			if commandBlockHasBody(lines, index+1, end) {
+				_, err := CompileCommandObject(text, index, world)
+				if err == nil {
+					err = fmt.Errorf("unknown command %q", queryName)
+				}
+				out = append(out, CommandDiagnostic{Line: index, End: len([]rune(lines[index].Text)), Code: "invalid-command-object", Message: err.Error()})
+			}
+			index = end
+			continue
+		}
 		if _, err := CompileCommandObject(text, index, world); err != nil {
 			out = append(out, CommandDiagnostic{Line: index, End: len([]rune(lines[index].Text)), Code: "invalid-command-object", Message: err.Error()})
 		}
 		index = end
 	}
 	return out
+}
+
+func commandBlockHasBody(lines []documentLine, from, to int) bool {
+	for index := from; index < to; index++ {
+		if strings.TrimSpace(lines[index].Text) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func LineAt(text string, line int) (string, error) {

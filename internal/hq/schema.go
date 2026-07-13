@@ -10,6 +10,8 @@ import (
 // SchemaKey is the canonical core protocol key type.
 type SchemaKey = core.SchemaKey
 type CommandField = core.CommandField
+type CommandValue = core.CommandValue
+type CommandPreset = core.CommandPreset
 type CommandDefinition = core.CommandDefinition
 type WorldDefinition = core.WorldDefinition
 type WorldRef = core.WorldRef

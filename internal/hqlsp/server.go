@@ -16,6 +16,7 @@ import (
 	"unicode/utf16"
 	"unicode/utf8"
 
+	"hq/internal/core"
 	"hq/internal/hq"
 	"hq/internal/hqprofile"
 )
@@ -30,6 +31,7 @@ type document struct {
 type Server struct {
 	profile   hqprofile.Profile
 	world     *hq.JsonlWorld
+	recall    *core.WorldRecallIndex
 	documents map[string]document
 }
 
@@ -43,7 +45,11 @@ func New(profile hqprofile.Profile) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load profile world: %w", err)
 	}
-	return &Server{profile: profile, world: world, documents: map[string]document{}}, nil
+	recall, err := hq.PrepareWorldRecall(world)
+	if err != nil {
+		return nil, fmt.Errorf("prepare profile world recall: %w", err)
+	}
+	return &Server{profile: profile, world: world, recall: recall, documents: map[string]document{}}, nil
 }
 
 func (s *Server) Serve(r io.Reader, w io.Writer) error {
@@ -71,7 +77,7 @@ func (s *Server) handle(w io.Writer, msg message) error {
 		return writeMessage(w, message{JSONRPC: "2.0", ID: msg.ID, Result: map[string]any{
 			"capabilities": map[string]any{
 				"textDocumentSync":       1,
-				"completionProvider":     map[string]any{"triggerCharacters": []string{"{", "\"", ":", ",", ".", " ", "="}},
+				"completionProvider":     map[string]any{"triggerCharacters": []string{"@", "{", "\"", ":", ",", ".", " ", "="}},
 				"codeActionProvider":     true,
 				"executeCommandProvider": map[string]any{"commands": []string{"hq.submit"}},
 			},
@@ -147,21 +153,26 @@ func (s *Server) complete(w io.Writer, msg message) error {
 	if err != nil {
 		return writeError(w, msg.ID, -32602, err.Error())
 	}
-	suggestions := hq.Complete(doc.Text, cursor, s.world)
+	var suggestions []hq.Suggestion
+	if s.recall != nil {
+		suggestions = hq.CompleteWithWorldRecall(doc.Text, cursor, doc.Version, s.world, s.recall)
+	} else {
+		suggestions = hq.Complete(doc.Text, cursor, s.world)
+	}
 	items := make([]map[string]any, 0, len(suggestions))
+	isIncomplete := s.recall != nil && hq.IsMutableWorldRecall(doc.Text, cursor, s.world)
 	for _, suggestion := range suggestions {
 		start, startErr := positionAtByte(doc.Text, suggestion.Edit.Start)
 		end, endErr := positionAtByte(doc.Text, suggestion.Edit.End)
 		if startErr != nil || endErr != nil {
 			return writeError(w, msg.ID, -32603, "completion edit is outside document")
 		}
-		data := map[string]any{"compileDraft": suggestion.Draft, "deploymentId": s.profile.DeploymentID}
-		if worldRef, selected := s.world.SelectedRef(); selected {
-			data["world"] = worldRef
-		}
-		items = append(items, map[string]any{
+		item := map[string]any{
 			"label":            suggestion.Label,
 			"detail":           suggestion.Detail,
+			"documentation":    suggestion.Documentation,
+			"sortText":         suggestion.SortText,
+			"filterText":       suggestion.FilterText,
 			"kind":             14,
 			"insertText":       suggestion.InsertText,
 			"insertTextFormat": 1,
@@ -169,10 +180,19 @@ func (s *Server) complete(w io.Writer, msg message) error {
 				"range":   map[string]any{"start": start, "end": end},
 				"newText": suggestion.Edit.Text,
 			},
-			"data": data,
-		})
+		}
+		if suggestion.Candidate != nil {
+			item["data"] = suggestion.Candidate
+		} else {
+			data := map[string]any{"compileDraft": suggestion.Draft, "deploymentId": s.profile.DeploymentID}
+			if worldRef, selected := s.world.SelectedRef(); selected {
+				data["world"] = worldRef
+			}
+			item["data"] = data
+		}
+		items = append(items, item)
 	}
-	return writeMessage(w, message{JSONRPC: "2.0", ID: msg.ID, Result: map[string]any{"isIncomplete": false, "items": items}})
+	return writeMessage(w, message{JSONRPC: "2.0", ID: msg.ID, Result: map[string]any{"isIncomplete": isIncomplete, "items": items}})
 }
 
 func (s *Server) codeAction(w io.Writer, msg message) error {

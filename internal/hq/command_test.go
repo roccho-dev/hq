@@ -8,6 +8,7 @@ import (
 
 const hostCommand = `{"kind":"hq.command.v1","name":"host.open","description":"open a host path","instruction":{"version":"instruction.v1","op":"run","target":"host","payload":{"capability":"host.open"}},"fields":[{"name":"path","type":"path","required":true,"examples":["C:\\work"],"bind":"payload.path"}]}`
 const herdrCommand = `{"kind":"hq.command.v1","name":"herdr.read","description":"read agent output","instruction":{"version":"instruction.v1","op":"run","target":"herdr","payload":{"action":"read"}},"fields":[{"name":"agent","type":"string","required":true,"examples":["reviewer"],"bind":"payload.agent"},{"name":"source","type":"enum","required":true,"enum":["recent-unwrapped","screen"],"bind":"payload.source"},{"name":"lines","type":"integer","required":true,"examples":["100"],"bind":"payload.lines"}]}`
+const recallCommand = `{"kind":"hq.command.v1","name":"herdr.read","aliases":["agent.read"],"keywords":["reviewer"],"description":"read agent output","instruction":{"version":"instruction.v1","op":"run","target":"herdr","payload":{"action":"read"}},"fields":[{"name":"agent","type":"string","required":true,"examples":["reviewer"],"bind":"payload.agent"},{"name":"source","type":"enum","required":true,"enum":["recent-unwrapped","screen"],"bind":"payload.source"},{"name":"lines","type":"integer","required":true,"default":100,"materialized_values":[50,200],"bind":"payload.lines"}],"presets":[{"id":"reviewer-screen","label":"Reviewer screen","values":{"agent":"reviewer","source":"screen","lines":100}}]}`
 
 func TestCommandWorldDataAloneExpandsCompletion(t *testing.T) {
 	hostOnly, err := LoadSchemaJSONL(strings.NewReader(hostCommand))
@@ -107,6 +108,24 @@ func TestCommandValidationIsLineScoped(t *testing.T) {
 	}
 }
 
+func TestCommandQueryDiagnosticsSuppressOnlyHeaderOnlyDrafts(t *testing.T) {
+	world, err := LoadSchemaJSONL(strings.NewReader(hostCommand))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, query := range []string{"@her", "@ reviewer screen", "@her\n\n"} {
+		if diagnostics := ValidateCommandDocument(query, world); len(diagnostics) != 0 {
+			t.Fatalf("header-only query %q diagnostics=%#v", query, diagnostics)
+		}
+	}
+	for _, attempted := range []string{"@typo\npath=x", "@ reviewer screen\npath=x"} {
+		diagnostics := ValidateCommandDocument(attempted, world)
+		if len(diagnostics) != 1 || diagnostics[0].Code != "invalid-command-object" {
+			t.Fatalf("attempted object %q diagnostics=%#v", attempted, diagnostics)
+		}
+	}
+}
+
 func TestCommandWorldCannotOwnAcceptedIdentity(t *testing.T) {
 	for _, invalid := range []string{
 		`{"kind":"hq.command.v1","name":"bad.base","instruction":{"id":"user-id"}}`,
@@ -115,6 +134,41 @@ func TestCommandWorldCannotOwnAcceptedIdentity(t *testing.T) {
 		if _, err := LoadSchemaJSONL(strings.NewReader(invalid)); err == nil {
 			t.Fatalf("reserved identity definition loaded: %s", invalid)
 		}
+	}
+}
+
+func TestLegacyCommandCompletionKeepsOrdinaryDraftSemantics(t *testing.T) {
+	world, err := LoadSchemaJSONL(strings.NewReader(recallCommand))
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := "@her"
+	objects := Complete(query, len(query), world)
+	if len(objects) != 1 || objects[0].Label != "herdr.read" || objects[0].Edit.Text != "@herdr.read" {
+		t.Fatalf("objects=%#v", objects)
+	}
+	if objects[0].Candidate != nil || objects[0].Draft.Kind != "candidate.command" || objects[0].Draft.Queue != "instruction.jsonl" {
+		t.Fatalf("legacy suggestion semantics=%#v", objects[0])
+	}
+	if diagnostics := ValidateCommandDocument(query, world); len(diagnostics) != 0 {
+		t.Fatalf("query draft diagnostics=%#v", diagnostics)
+	}
+
+	keyBuffer := "@herdr.read\nagent=reviewer\nso"
+	keys := Complete(keyBuffer, len(keyBuffer), world)
+	if len(keys) != 1 || keys[0].Label != "source" || keys[0].Edit.Text != "source=" || keys[0].Edit.Start != strings.LastIndex(keyBuffer, "so") {
+		t.Fatalf("keys=%#v", keys)
+	}
+	if keys[0].Candidate != nil || keys[0].Draft.Kind != "candidate.command-field" {
+		t.Fatalf("legacy key semantics=%#v", keys[0])
+	}
+	valueBuffer := "@herdr.read\nsource=scr"
+	values := Complete(valueBuffer, len(valueBuffer), world)
+	if len(values) != 1 || values[0].Label != "screen" || values[0].Edit.Text != "screen" || values[0].Edit.Start != strings.LastIndex(valueBuffer, "scr") {
+		t.Fatalf("values=%#v", values)
+	}
+	if values[0].Candidate != nil || values[0].Draft.Kind != "candidate.command-value" {
+		t.Fatalf("legacy value semantics=%#v", values[0])
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 
 	"hq/internal/core"
@@ -121,8 +122,7 @@ func decodeStrict(data []byte, target any) error {
 }
 
 func validateCommand(command core.CommandDefinition) error {
-	command.Name = strings.TrimSpace(command.Name)
-	if command.Name == "" || strings.ContainsAny(command.Name, " \t\r\n=\"") {
+	if !validName(command.Name) {
 		return fmt.Errorf("command name is invalid")
 	}
 	if command.Instruction == nil {
@@ -133,9 +133,15 @@ func validateCommand(command core.CommandDefinition) error {
 			return fmt.Errorf("command %q instruction must not declare reserved field %q", command.Name, reserved)
 		}
 	}
+	if err := validateWords(command.Name, "alias", command.Aliases); err != nil {
+		return err
+	}
+	if err := validateWords(command.Name, "keyword", command.Keywords); err != nil {
+		return err
+	}
 	seen := map[string]bool{}
 	for _, field := range command.Fields {
-		if strings.TrimSpace(field.Name) == "" || strings.ContainsAny(field.Name, " \t\r\n=\"") {
+		if !validName(field.Name) {
 			return fmt.Errorf("command %q has invalid field name", command.Name)
 		}
 		if seen[field.Name] {
@@ -153,6 +159,58 @@ func validateCommand(command core.CommandDefinition) error {
 		root := strings.Split(field.Bind, ".")[0]
 		if root == "id" || root == "created_at" {
 			return fmt.Errorf("command %q field %q binds reserved identity field %q", command.Name, field.Name, root)
+		}
+		if field.Type == "enum" && len(field.Enum) == 0 {
+			return fmt.Errorf("command %q enum field %q requires enum values", command.Name, field.Name)
+		}
+		if err := validateStringValues(command.Name, field, "enum", field.Enum); err != nil {
+			return err
+		}
+		if err := validateStringValues(command.Name, field, "example", field.Examples); err != nil {
+			return err
+		}
+		if field.Default != nil {
+			if err := validateLiteral(field, *field.Default); err != nil {
+				return fmt.Errorf("command %q field %q default: %w", command.Name, field.Name, err)
+			}
+		}
+		for index, value := range field.MaterializedValues {
+			if err := validateLiteral(field, value); err != nil {
+				return fmt.Errorf("command %q field %q materialized_values[%d]: %w", command.Name, field.Name, index, err)
+			}
+		}
+	}
+	seenPresets := map[string]bool{}
+	for _, preset := range command.Presets {
+		if !validName(preset.ID) {
+			return fmt.Errorf("command %q has invalid preset id", command.Name)
+		}
+		if seenPresets[preset.ID] {
+			return fmt.Errorf("command %q has duplicate preset %q", command.Name, preset.ID)
+		}
+		seenPresets[preset.ID] = true
+		if strings.TrimSpace(preset.Label) == "" || preset.Label != strings.TrimSpace(preset.Label) {
+			return fmt.Errorf("command %q preset %q requires a canonical label", command.Name, preset.ID)
+		}
+		if preset.Values == nil {
+			return fmt.Errorf("command %q preset %q requires values", command.Name, preset.ID)
+		}
+		for name, value := range preset.Values {
+			field, ok := definitionField(command, name)
+			if !ok {
+				return fmt.Errorf("command %q preset %q has unknown field %q", command.Name, preset.ID, name)
+			}
+			if err := validateLiteral(field, value); err != nil {
+				return fmt.Errorf("command %q preset %q field %q: %w", command.Name, preset.ID, name, err)
+			}
+		}
+		for _, field := range command.Fields {
+			if !field.Required {
+				continue
+			}
+			if _, ok := preset.Values[field.Name]; !ok && field.Default == nil {
+				return fmt.Errorf("command %q preset %q is missing required field %q", command.Name, preset.ID, field.Name)
+			}
 		}
 	}
 	return nil
@@ -506,6 +564,96 @@ func localToolValueMatches(input core.LocalToolInput, value any) bool {
 		}
 	}
 	return false
+}
+
+func validName(value string) bool {
+	return value != "" && value == strings.TrimSpace(value) && !strings.ContainsAny(value, " \t\r\n=\"")
+}
+
+func validateWords(command, kind string, values []string) error {
+	seen := map[string]bool{}
+	for _, value := range values {
+		if value == "" || value != strings.TrimSpace(value) || strings.ContainsAny(value, "\r\n") {
+			return fmt.Errorf("command %q has invalid %s", command, kind)
+		}
+		if seen[value] {
+			return fmt.Errorf("command %q has duplicate %s %q", command, kind, value)
+		}
+		seen[value] = true
+	}
+	return nil
+}
+
+func validateStringValues(command string, field core.CommandField, kind string, values []string) error {
+	seen := map[string]bool{}
+	for _, value := range values {
+		if value == "" || strings.ContainsAny(value, "\r\n\"") {
+			return fmt.Errorf("command %q field %q has non-materializable %s", command, field.Name, kind)
+		}
+		if seen[value] {
+			return fmt.Errorf("command %q field %q has duplicate %s %q", command, field.Name, kind, value)
+		}
+		seen[value] = true
+		if err := validateInput(field, value); err != nil {
+			return fmt.Errorf("command %q field %q %s %q: %w", command, field.Name, kind, value, err)
+		}
+	}
+	return nil
+}
+
+func validateLiteral(field core.CommandField, literal core.CommandValue) error {
+	if literal.Text() == "" || strings.ContainsAny(literal.Text(), "\r\n\"") {
+		return fmt.Errorf("must be non-empty and materializable by the command grammar")
+	}
+	switch field.Type {
+	case "string", "path", "enum":
+		if _, ok := literal.Value.(string); !ok {
+			return fmt.Errorf("must be a JSON string for type %s", field.Type)
+		}
+	case "integer":
+		number, ok := literal.Value.(json.Number)
+		if !ok {
+			return fmt.Errorf("must be a JSON integer")
+		}
+		if _, err := number.Int64(); err != nil {
+			return fmt.Errorf("must be a JSON integer")
+		}
+	case "boolean":
+		if _, ok := literal.Value.(bool); !ok {
+			return fmt.Errorf("must be a JSON boolean")
+		}
+	}
+	return validateInput(field, literal.Text())
+}
+
+func validateInput(field core.CommandField, value string) error {
+	switch field.Type {
+	case "enum":
+		for _, candidate := range field.Enum {
+			if candidate == value {
+				return nil
+			}
+		}
+		return fmt.Errorf("must be one of %s", strings.Join(field.Enum, ", "))
+	case "integer":
+		if _, err := strconv.ParseInt(value, 10, 64); err != nil {
+			return fmt.Errorf("must be an integer")
+		}
+	case "boolean":
+		if value != "true" && value != "false" {
+			return fmt.Errorf("must be true or false")
+		}
+	}
+	return nil
+}
+
+func definitionField(command core.CommandDefinition, name string) (core.CommandField, bool) {
+	for _, field := range command.Fields {
+		if field.Name == name {
+			return field, true
+		}
+	}
+	return core.CommandField{}, false
 }
 
 func DefaultWorld() *core.JsonlWorld {

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"sort"
 	"strings"
+
+	"hq/internal/core"
 )
 
 type TextEdit struct {
@@ -23,24 +25,42 @@ type CompileDraft struct {
 }
 
 type Suggestion struct {
-	Label       string       `json:"label"`
-	InsertText  string       `json:"insertText"`
-	Detail      string       `json:"detail,omitempty"`
-	Description string       `json:"description,omitempty"`
-	Tag         string       `json:"tag,omitempty"`
-	Score       int          `json:"score"`
-	Edit        TextEdit     `json:"edit"`
-	Draft       CompileDraft `json:"compileDraft"`
+	Label         string       `json:"label"`
+	InsertText    string       `json:"insertText"`
+	Detail        string       `json:"detail,omitempty"`
+	Description   string       `json:"description,omitempty"`
+	Tag           string       `json:"tag,omitempty"`
+	Score         int          `json:"score"`
+	Edit          TextEdit     `json:"edit"`
+	Draft         CompileDraft `json:"compileDraft"`
+	Documentation string       `json:"documentation,omitempty"`
+	SortText      string       `json:"sortText,omitempty"`
+	FilterText    string       `json:"filterText,omitempty"`
+	Candidate     *Candidate   `json:"candidate,omitempty"`
 }
 
 func Complete(buffer string, cursor int, world *JsonlWorld) []Suggestion {
 	if world == nil {
 		world = DefaultWorld()
 	}
+	return complete(buffer, cursor, 0, world, nil)
+}
+
+func CompleteWithWorldRecall(buffer string, cursor, documentVersion int, world *JsonlWorld, recall *core.WorldRecallIndex) []Suggestion {
+	if world == nil || recall == nil {
+		return nil
+	}
+	if _, selected := world.SelectedRef(); !selected {
+		return nil
+	}
+	return complete(buffer, cursor, documentVersion, world, recall)
+}
+
+func complete(buffer string, cursor, documentVersion int, world *JsonlWorld, recall *core.WorldRecallIndex) []Suggestion {
 	if len(world.Commands) > 0 {
 		line, _ := currentLine(buffer, cursor)
 		if !strings.HasPrefix(strings.TrimSpace(line), "{") {
-			return commandSuggestions(buffer, cursor, world)
+			return commandSuggestions(buffer, cursor, documentVersion, world, recall)
 		}
 	}
 	ctx := Analyze(buffer, cursor, world)
@@ -257,15 +277,5 @@ func tag(group, fallback string) string {
 func match(candidate, partial string) bool {
 	c := strings.ToLower(candidate)
 	p := strings.ToLower(partial)
-	if strings.Contains(c, p) {
-		return true
-	}
-	// cheap subsequence fuzzy match
-	j := 0
-	for i := 0; i < len(c) && j < len(p); i++ {
-		if c[i] == p[j] {
-			j++
-		}
-	}
-	return j == len(p)
+	return strings.Contains(c, p)
 }

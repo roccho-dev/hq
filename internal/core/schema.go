@@ -1,6 +1,12 @@
 package core
 
-import "sort"
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"sort"
+	"strconv"
+)
 
 // SchemaKey describes one logical JSONL key that the autocomplete compiler may propose.
 // It is a core protocol type, not a concrete source-file schema parser.
@@ -18,13 +24,65 @@ type SchemaKey struct {
 // is lowered into the canonical instruction object. The compiler interprets
 // only these structural declarations; command meaning remains world data.
 type CommandField struct {
-	Name        string   `json:"name"`
-	Type        string   `json:"type"`
-	Required    bool     `json:"required,omitempty"`
-	Description string   `json:"description,omitempty"`
-	Enum        []string `json:"enum,omitempty"`
-	Examples    []string `json:"examples,omitempty"`
-	Bind        string   `json:"bind"`
+	Name               string         `json:"name"`
+	Type               string         `json:"type"`
+	Required           bool           `json:"required,omitempty"`
+	Description        string         `json:"description,omitempty"`
+	Enum               []string       `json:"enum,omitempty"`
+	Default            *CommandValue  `json:"default,omitempty"`
+	Examples           []string       `json:"examples,omitempty"`
+	MaterializedValues []CommandValue `json:"materialized_values,omitempty"`
+	Bind               string         `json:"bind"`
+}
+
+// CommandValue is one scalar value explicitly materialized by world data. It
+// deliberately excludes objects, arrays, and null: hq.command.v1 fields are a
+// finite primitive vocabulary, not an embedded expression language.
+type CommandValue struct {
+	Value any
+}
+
+func (v *CommandValue) UnmarshalJSON(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return err
+	}
+	switch value.(type) {
+	case string, bool, json.Number:
+		v.Value = value
+		return nil
+	default:
+		return errors.New("command value must be a string, integer, or boolean")
+	}
+}
+
+func (v CommandValue) MarshalJSON() ([]byte, error) {
+	return json.Marshal(v.Value)
+}
+
+func (v CommandValue) Text() string {
+	switch value := v.Value.(type) {
+	case string:
+		return value
+	case bool:
+		return strconv.FormatBool(value)
+	case json.Number:
+		return value.String()
+	case nil:
+		return ""
+	default:
+		return ""
+	}
+}
+
+// CommandPreset is a complete object explicitly declared by one command row.
+// ID is a stable structural component within that exact command definition.
+type CommandPreset struct {
+	ID     string                  `json:"id"`
+	Label  string                  `json:"label"`
+	Values map[string]CommandValue `json:"values"`
 }
 
 // CommandDefinition is an adapter-provided input-language declaration. Base
@@ -34,9 +92,12 @@ type CommandDefinition struct {
 	CommandID      string         `json:"command_id,omitempty"`
 	CommandVersion string         `json:"command_version,omitempty"`
 	Name           string         `json:"name"`
-	Description    string         `json:"description,omitempty"`
-	Instruction    map[string]any `json:"instruction"`
-	Fields         []CommandField `json:"fields,omitempty"`
+	Aliases        []string        `json:"aliases,omitempty"`
+	Keywords       []string        `json:"keywords,omitempty"`
+	Description    string          `json:"description,omitempty"`
+	Instruction    map[string]any  `json:"instruction"`
+	Fields         []CommandField  `json:"fields,omitempty"`
+	Presets        []CommandPreset `json:"presets,omitempty"`
 }
 
 // LocalToolDefinition is a finite, data-only description of one exact local
