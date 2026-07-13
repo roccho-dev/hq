@@ -28,7 +28,8 @@ That filesystem was not mounted in the GitHub-connected execution environment us
 |---|---|---|---|
 | PR #119 generic local-tool schema, preparer, runner, result integration | already adopted | merged PR #119 | Canonical generic core; any duplicate implementation is rejected. |
 | Explorer `host.open` Run-to-Start handoff fix | adopted after rebuild | merged PR #125; old PR #120 closed | Non-duplicate bug fix in the existing host adapter. Kept outside local-tool core. |
-| Explorer deterministic adapter negatives | adopted after repair | PR #125 | Preserves late non-zero exit, invalid cwd, poisoned PATH, spaces, and pre-effect cancellation evidence. Windows helper cleanup was corrected on the current base. |
+| Explorer deterministic adapter negatives | adopted after repair | merged PR #125 | Preserves late non-zero exit, invalid cwd, poisoned PATH, spaces, and pre-effect cancellation evidence. |
+| Explorer helper-evidence read race | adopted as separate test-only fix | merged PR #127 | Complete JSON/text must be observed before asserting handoff evidence. Kept outside the WSLC data-only lane. |
 | Explorer native pc7337 evidence | deferred | W1 release gate | Mutable host is owned by W1. Historical evidence is not the exact-head merge authority. |
 | WSLC `hq.local-tool.v1` data row | adopted | current data-only WSLC PR | Second unrelated consumer proves the merged generic core accepts new tools through world data. |
 | WSLC `hq.command.v1` row without stable identity | rejected and replaced | `command_id=wslc.version`, `command_version=1` | #113/#122 requires explicit stable command identity/version in selected worlds. |
