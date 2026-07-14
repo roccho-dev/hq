@@ -187,7 +187,7 @@ jobs:
         with:
           name: hq-official-windows-amd64-${{ github.sha }}
           path: dist
-      - name: Verify and publish immutable commit release
+      - name: Publish and read back the immutable commit release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -195,12 +195,27 @@ jobs:
           set -euo pipefail
           test "$(jq -r .source_sha dist/manifest-linux-amd64.json)" = "$GITHUB_SHA"
           test "$(jq -r .source_sha dist/manifest-windows-amd64.json)" = "$GITHUB_SHA"
+          test "$(jq -r .go_version dist/manifest-linux-amd64.json)" = "go1.23.12"
+          test "$(jq -r .go_version dist/manifest-windows-amd64.json)" = "go1.23.12"
+
           jq -s --arg source_sha "$GITHUB_SHA" '{
             kind: "hq.officialProduct.v1",
             source_sha: $source_sha,
             builds: map({os, arch, go_version}),
             artifacts: map(.artifacts[])
           }' dist/manifest-linux-amd64.json dist/manifest-windows-amd64.json > dist/hq-product-manifest.json
+          jq -e --arg source_sha "$GITHUB_SHA" '
+            .kind == "hq.officialProduct.v1" and
+            .source_sha == $source_sha and
+            (.builds | length == 2) and
+            (.artifacts | length == 4) and
+            ([.artifacts[].name] | sort) == ([
+              "hq-linux-amd64",
+              "hq-worker-linux-amd64",
+              "hq-windows-amd64.exe",
+              "hq-worker-windows-amd64.exe"
+            ] | sort)
+          ' dist/hq-product-manifest.json >/dev/null
           (
             cd dist
             sha256sum \
@@ -209,15 +224,65 @@ jobs:
               manifest-linux-amd64.json manifest-windows-amd64.json \
               hq-product-manifest.json > SHA256SUMS
           )
+
           tag="hq-artifact-$GITHUB_SHA"
+          verified_tag="hq-artifact-verified-$GITHUB_SHA"
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            mkdir -p existing
+            rm -rf existing
+            mkdir existing
             gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS --dir existing
             cmp existing/SHA256SUMS dist/SHA256SUMS
-            exit 0
+          else
+            gh release create "$tag" dist/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "hq official artifact ${GITHUB_SHA:0:12}" \
+              --notes "One clean source commit produced the official Linux and native Windows hq/hq-worker artifact family. See hq-product-manifest.json and SHA256SUMS."
           fi
-          gh release create "$tag" dist/* \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
-            --title "hq official artifact ${GITHUB_SHA:0:12}" \
-            --notes "One clean source commit produced the official Linux and native Windows hq/hq-worker artifact family. See hq-product-manifest.json and SHA256SUMS."
+
+          rm -rf release-readback
+          mkdir release-readback
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | sort > release-readback/actual-assets.txt
+          cat > release-readback/expected-assets.txt <<'EOF'
+          SHA256SUMS
+          hq-linux-amd64
+          hq-product-manifest.json
+          hq-windows-amd64.exe
+          hq-worker-linux-amd64
+          hq-worker-windows-amd64.exe
+          manifest-linux-amd64.json
+          manifest-windows-amd64.json
+          EOF
+          sort -o release-readback/expected-assets.txt release-readback/expected-assets.txt
+          cmp release-readback/expected-assets.txt release-readback/actual-assets.txt
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir release-readback/assets
+
+          (
+            cd release-readback/assets
+            sha256sum -c SHA256SUMS
+          )
+          for name in \
+            hq-linux-amd64 hq-worker-linux-amd64 \
+            hq-windows-amd64.exe hq-worker-windows-amd64.exe \
+            manifest-linux-amd64.json manifest-windows-amd64.json \
+            hq-product-manifest.json SHA256SUMS; do
+            cmp "dist/$name" "release-readback/assets/$name"
+          done
+          test "$(jq -r .source_sha release-readback/assets/manifest-linux-amd64.json)" = "$GITHUB_SHA"
+          test "$(jq -r .source_sha release-readback/assets/manifest-windows-amd64.json)" = "$GITHUB_SHA"
+          jq -e --arg source_sha "$GITHUB_SHA" '
+            .kind == "hq.officialProduct.v1" and
+            .source_sha == $source_sha and
+            (.builds | length == 2) and
+            (.artifacts | length == 4)
+          ' release-readback/assets/hq-product-manifest.json >/dev/null
+
+          existing_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$verified_tag" --jq .object.sha 2>/dev/null || true)"
+          if test -n "$existing_sha"; then
+            test "$existing_sha" = "$GITHUB_SHA"
+          else
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f ref="refs/tags/$verified_tag" \
+              -f sha="$GITHUB_SHA" >/dev/null
+          fi
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$verified_tag" --jq .object.sha)" = "$GITHUB_SHA"
