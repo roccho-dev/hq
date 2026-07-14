@@ -1,7 +1,7 @@
 package workerservice
 
 import (
-	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"hq/internal/atomicfile"
 	"hq/internal/hqprofile"
 	"hq/internal/workerclaim"
 	"hq/internal/workersafety"
@@ -328,12 +329,11 @@ func readStopReceipt(path string) (StopReceipt, error) {
 }
 
 func readStrictJSON(path string, target any) error {
-	file, err := os.Open(path)
+	data, err := atomicfile.Read(path)
 	if err != nil {
 		return err
 	}
-	defer file.Close()
-	decoder := json.NewDecoder(bufio.NewReader(file))
+	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
 		return err
@@ -349,33 +349,7 @@ func readStrictJSON(path string, target any) error {
 }
 
 func writeJSONAtomic(path string, value any) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	temporary, err := os.CreateTemp(filepath.Dir(path), ".hq-worker-stop-*.tmp")
-	if err != nil {
-		return err
-	}
-	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
-	if err := temporary.Chmod(0o600); err != nil {
-		temporary.Close()
-		return err
-	}
-	encoder := json.NewEncoder(temporary)
-	encoder.SetEscapeHTML(false)
-	writeErr := encoder.Encode(value)
-	if writeErr == nil {
-		writeErr = temporary.Sync()
-	}
-	closeErr := temporary.Close()
-	if writeErr != nil {
-		return writeErr
-	}
-	if closeErr != nil {
-		return closeErr
-	}
-	return os.Rename(temporaryPath, path)
+	return atomicfile.WriteJSON(path, value)
 }
 
 func canonicalControlWorkspace(root string) (string, error) {

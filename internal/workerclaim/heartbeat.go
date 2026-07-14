@@ -1,6 +1,7 @@
 package workerclaim
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"hq/internal/atomicfile"
 	"hq/internal/workersafety"
 )
 
@@ -42,22 +44,8 @@ func (c *Claim) WriteHeartbeat(deploymentID, profile, state string, now time.Tim
 	}
 	record := Heartbeat{Kind: HeartbeatKind, ClaimID: current.ClaimID, WorkerID: current.WorkerID, Workspace: current.Workspace, DeploymentID: deploymentID, Profile: profile, State: state, ObservedAt: now.UTC()}
 	path := filepath.Join(filepath.Dir(c.path), heartbeatName)
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
-	if err != nil {
+	if err := atomicfile.WriteJSON(path, record); err != nil {
 		return Heartbeat{}, err
-	}
-	encoder := json.NewEncoder(file)
-	encoder.SetEscapeHTML(false)
-	writeErr := encoder.Encode(record)
-	if writeErr == nil {
-		writeErr = file.Sync()
-	}
-	closeErr := file.Close()
-	if writeErr != nil {
-		return Heartbeat{}, writeErr
-	}
-	if closeErr != nil {
-		return Heartbeat{}, closeErr
 	}
 	return record, nil
 }
@@ -71,13 +59,17 @@ func ReadHeartbeat(projectRoot string) (Heartbeat, error) {
 	if err != nil {
 		return Heartbeat{}, err
 	}
-	file, err := os.Open(filepath.Join(layout.ArtifactRoot, "worker", heartbeatName))
+	path := filepath.Join(layout.ArtifactRoot, "worker", heartbeatName)
+	data, err := readHeartbeatFile(path)
 	if err != nil {
 		return Heartbeat{}, err
 	}
-	defer file.Close()
+	return decodeHeartbeat(data)
+}
+
+func decodeHeartbeat(data []byte) (Heartbeat, error) {
 	var record Heartbeat
-	decoder := json.NewDecoder(file)
+	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&record); err != nil {
 		return Heartbeat{}, err
@@ -114,7 +106,7 @@ func RemoveHeartbeat(projectRoot string) error {
 	if err != nil {
 		return err
 	}
-	err = os.Remove(filepath.Join(layout.ArtifactRoot, "worker", heartbeatName))
+	err = atomicfile.Remove(filepath.Join(layout.ArtifactRoot, "worker", heartbeatName))
 	if os.IsNotExist(err) {
 		return nil
 	}

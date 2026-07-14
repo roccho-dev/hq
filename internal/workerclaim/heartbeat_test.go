@@ -1,6 +1,7 @@
 package workerclaim
 
 import (
+	"sync"
 	"testing"
 	"time"
 )
@@ -31,5 +32,45 @@ func TestManagedHeartbeatBlocksLiveRecoveryAndAllowsExactStaleRecovery(t *testin
 	}
 	if inspection.Exists {
 		t.Fatal("stale claim must be removed after exact recovery")
+	}
+}
+
+func TestHeartbeatReadersNeverObserveATruncatedUpdate(t *testing.T) {
+	root := t.TempDir()
+	base := time.Date(2026, 7, 14, 7, 0, 0, 0, time.UTC)
+	claim, err := Acquire(root, "worker-atomic-heartbeat", base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer claim.Release()
+	if _, err := claim.WriteHeartbeat("dep-atomic", "local", "configured_ready", base); err != nil {
+		t.Fatal(err)
+	}
+
+	const updates = 100
+	start := make(chan struct{})
+	errors := make(chan error, updates)
+	var readers sync.WaitGroup
+	readers.Add(1)
+	go func() {
+		defer readers.Done()
+		<-start
+		for index := 0; index < updates; index++ {
+			if _, err := ReadHeartbeat(root); err != nil {
+				errors <- err
+				return
+			}
+		}
+	}()
+	close(start)
+	for index := 1; index <= updates; index++ {
+		if _, err := claim.WriteHeartbeat("dep-atomic", "local", "configured_ready", base.Add(time.Duration(index)*time.Millisecond)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	readers.Wait()
+	close(errors)
+	for err := range errors {
+		t.Fatalf("heartbeat reader observed a partial update: %v", err)
 	}
 }

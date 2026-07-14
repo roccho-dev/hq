@@ -36,7 +36,7 @@ func TestServeStopsThroughExactProfileControl(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- Serve(controlled, profile, "worker-stop-service-test", &output) }()
 
-	owner := waitFreshOwner(t, profile, 2*time.Second)
+	owner := waitFreshOwner(t, profile, done, 5*time.Second)
 	request, err := RequestStop(profile, time.Now())
 	if err != nil {
 		t.Fatal(err)
@@ -196,10 +196,15 @@ func claimedControlProfile(t *testing.T) (hqprofile.Profile, *workerclaim.Claim)
 	return profile, claim
 }
 
-func waitFreshOwner(t *testing.T, profile hqprofile.Profile, timeout time.Duration) workerclaim.Owner {
+func waitFreshOwner(t *testing.T, profile hqprofile.Profile, done <-chan error, timeout time.Duration) workerclaim.Owner {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
+		select {
+		case err := <-done:
+			t.Fatalf("managed service exited before publishing a fresh heartbeat: %v", err)
+		default:
+		}
 		inspection, err := workerclaim.Inspect(profile.WorkspaceRoot, time.Now(), 0)
 		if err == nil && inspection.Owner != nil {
 			_, fresh, heartbeatErr := workerclaim.HeartbeatFresh(profile.WorkspaceRoot, inspection.Owner.ClaimID, time.Now(), profile.HealthTimeout())
