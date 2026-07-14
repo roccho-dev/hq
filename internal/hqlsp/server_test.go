@@ -1,6 +1,7 @@
 package hqlsp
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"os"
@@ -565,6 +566,28 @@ func TestLegacyIdentityFreeWorldWithDigestUsesOrdinaryCompletionData(t *testing.
 	}
 	if server.world.Identity != nil || server.world.Digest == "" || server.recall != nil {
 		t.Fatalf("legacy world construction=%#v recall=%#v", server.world, server.recall)
+	}
+	if server.selected {
+		t.Fatal("identity-free legacy world was reported as a strict selection")
+	}
+	var initialize bytes.Buffer
+	if err := server.handle(&initialize, message{JSONRPC: "2.0", ID: json.RawMessage(`1`), Method: "initialize"}); err != nil {
+		t.Fatal(err)
+	}
+	response, err := readMessage(bufio.NewReader(&initialize))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, ok := response.Result.(map[string]any)
+	if !ok {
+		t.Fatalf("legacy initialize result=%#v", response.Result)
+	}
+	capabilities, ok := result["capabilities"].(map[string]any)
+	if !ok {
+		t.Fatalf("legacy initialize capabilities=%#v", result["capabilities"])
+	}
+	if _, claimed := capabilities["experimental"]; claimed {
+		t.Fatalf("legacy initialize made selected-world claim: %#v", capabilities)
 	}
 	uri := "file:///legacy.hq"
 	server.documents[uri] = document{Text: "@her", Version: 9}

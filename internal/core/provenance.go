@@ -10,11 +10,11 @@ import (
 )
 
 const (
-	WorldDefinitionKind       = "hq.world.v1"
-	CompileProvenanceKind     = "hq.compile.provenance.v1"
-	CommandInputKind          = "hq.command.v1"
-	CanonicalJSONInputKind    = "canonical-json"
-	DigestAlgorithmPrefix     = "sha256:"
+	WorldDefinitionKind    = "hq.world.v1"
+	CompileProvenanceKind  = "hq.compile.provenance.v1"
+	CommandInputKind       = "hq.command.v1"
+	CanonicalJSONInputKind = "canonical-json"
+	DigestAlgorithmPrefix  = "sha256:"
 )
 
 // WorldDefinition gives one immutable aggregate world a stable identity. The
@@ -179,6 +179,13 @@ func ValidDigest(value string) bool {
 	}
 	_, err := hex.DecodeString(raw)
 	return err == nil
+}
+
+// ValidWorldRef reports whether ref can identify one strict selected world.
+// It is shared by runtime evidence readers so they do not reimplement the
+// selected-world identity validation contract.
+func ValidWorldRef(ref WorldRef) bool {
+	return validStableIdentity(ref.WorldID) && ValidDigest(ref.Digest)
 }
 
 func validStableIdentity(value string) bool {

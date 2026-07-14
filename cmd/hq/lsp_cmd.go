@@ -16,6 +16,12 @@ func init() {
 	}
 }
 func runSubcommand(args []string, stdin io.Reader, stdout, stderr io.Writer) (bool, int) {
+	if len(args) >= 2 && args[0] == "world" && args[1] == "inspect" {
+		return true, runWorldInspect(args[2:], stdout, stderr)
+	}
+	if len(args) >= 2 && args[0] == "profile" && args[1] == "inspect" {
+		return true, runProfileInspect(args[2:], stdout, stderr)
+	}
 	if len(args) == 0 || args[0] != "lsp" {
 		return false, 0
 	}

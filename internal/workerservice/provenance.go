@@ -3,26 +3,17 @@ package workerservice
 import (
 	"errors"
 	"fmt"
-	"os"
 
-	"hq/internal/adapter/current"
 	"hq/internal/core"
 	"hq/internal/hqprofile"
 	"hq/internal/localtool"
+	"hq/internal/selectedworld"
 	"hq/internal/worker"
 	"hq/internal/worker/adapter"
 )
 
-func loadProfileWorld(profile hqprofile.Profile) (*core.JsonlWorld, error) {
-	if profile.WorldPath == "" {
-		return nil, nil
-	}
-	file, err := os.Open(profile.WorldPath)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	return current.LoadRuntimeWorldJSONL(file)
+func loadProfileSelection(profile hqprofile.Profile) (selectedworld.Selection, error) {
+	return selectedworld.Load(profile.WorldPath)
 }
 
 // loadRegistryForWorld builds adapters from the exact in-memory world snapshot

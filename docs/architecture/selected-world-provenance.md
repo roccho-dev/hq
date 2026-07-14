@@ -54,6 +54,41 @@ The digest excludes:
 
 Declared array order remains semantic where it controls rendering or execution.
 
+## Read-only selection observation
+
+Issue #128 is the authority for query-independent deployment observation. The
+strict loaders expose identity already computed by hq; these reports do not
+select, compile, activate, accept, queue, or execute anything.
+
+```text
+hq world inspect --path <absolute-world-jsonl> --json
+{"kind":"hq.selectedWorldInspection.v1","world":{"world_id":"example.production","digest":"sha256:..."}}
+
+hq profile inspect --profile <name> --profile-root <absolute-root> --json
+{"kind":"hq.profileSelectionInspection.v1","profile":"local","deployment_id":"deployment-1","world_path":"<absolute-world-jsonl>","world":{"world_id":"example.production","digest":"sha256:..."}}
+```
+
+Both commands emit one JSON line, use only explicit absolute regular-file
+paths, invoke the strict selected-world loader, and write zero accepted, event,
+or history rows.
+
+The standard LSP `initialize` result reports the exact world loaded by that
+process as `capabilities.experimental.hq` with kind
+`hq.runtimeSelection.v1`, runtime `lsp`, profile, deployment ID, and world
+reference. An identity-free legacy LSP world retains its existing completion
+behavior but emits no selected-world claim and therefore cannot satisfy
+deployment activation evidence. New managed workers write
+`worker.heartbeat.v2` with required
+`selected_world`; `hq-worker health` emits `hq.workerHealth.v2` and is ready
+only when the fresh heartbeat profile, deployment, world, and ready state match
+the current strict profile inspection. A v1 heartbeat remains readable only as
+bounded compatibility/recovery evidence and can never prove readiness.
+
+World/profile replacement does not hot-reload either process. Deployment must
+restart the official LSP and managed worker, then compare their new in-process
+reports. hq performs no process discovery or activation and does not interpret
+an authoring ledger or release manifest.
+
 ## Command identity
 
 Every command in a strict selected world contains:

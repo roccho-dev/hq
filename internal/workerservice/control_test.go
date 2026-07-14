@@ -5,12 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"hq/internal/core"
 	"hq/internal/hqprofile"
 	"hq/internal/workerclaim"
 )
@@ -25,9 +27,16 @@ func TestServeStopsThroughExactProfileControl(t *testing.T) {
 	if err := os.WriteFile(acceptedPath, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	worldPath := filepath.Join(root, "world.jsonl")
+	world := `{"kind":"hq.world.v1","world_id":"world.stop-control-test"}` + "\n" +
+		`{"key":"reason","type":"string"}` + "\n"
+	if err := os.WriteFile(worldPath, []byte(world), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	profile := hqprofile.Profile{
 		Name: "selected", DeploymentID: "dep-stop-test", WorkspaceRoot: workspace,
-		AcceptedPath: acceptedPath, EventsPath: filepath.Join(workspace, ".hq", "events", "events.jsonl"),
+		WorldPath: worldPath, AcceptedPath: acceptedPath,
+		EventsPath:     filepath.Join(workspace, ".hq", "events", "events.jsonl"),
 		PollIntervalMS: 10, HealthTimeoutMS: 500,
 	}
 	var output bytes.Buffer
@@ -90,6 +99,86 @@ func TestServeStopsThroughExactProfileControl(t *testing.T) {
 	}
 	if final.State != "stopped" || final.ClaimID != owner.ClaimID {
 		t.Fatalf("final lifecycle=%+v", final)
+	}
+}
+
+func TestStopControlAtomicReplacementSupportsConcurrentReaders(t *testing.T) {
+	request := StopRequest{
+		Kind: StopRequestKind, RequestID: "request-atomic-read", ClaimID: "claim-atomic-read",
+		WorkerID: "worker-atomic-read", Workspace: t.TempDir(), Profile: "selected",
+		DeploymentID: "deployment-atomic-read", RequestedAt: time.Unix(1_700_000_000, 0).UTC(),
+	}
+	receipt := StopReceipt{
+		Kind: StopReceiptKind, RequestID: request.RequestID, ClaimID: request.ClaimID,
+		WorkerID: request.WorkerID, Workspace: request.Workspace, Profile: request.Profile,
+		DeploymentID: request.DeploymentID, RequestedAt: request.RequestedAt,
+		StoppedAt: request.RequestedAt.Add(time.Second),
+	}
+	tests := []struct {
+		name  string
+		value any
+		read  func(string) error
+	}{
+		{name: "request", value: request, read: func(path string) error {
+			observed, err := readStopRequest(path)
+			if err == nil && observed != request {
+				return fmt.Errorf("atomic stop request changed: got %+v want %+v", observed, request)
+			}
+			return err
+		}},
+		{name: "receipt", value: receipt, read: func(path string) error {
+			observed, err := readStopReceipt(path)
+			if err == nil && observed != receipt {
+				return fmt.Errorf("atomic stop receipt changed: got %+v want %+v", observed, receipt)
+			}
+			return err
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "claim-stop."+test.name+".json")
+			if err := writeJSONAtomic(path, test.value); err != nil {
+				t.Fatal(err)
+			}
+			started := make(chan struct{})
+			stop := make(chan struct{})
+			done := make(chan struct{})
+			readErr := make(chan error, 1)
+			go func() {
+				defer close(done)
+				first := true
+				for {
+					if err := test.read(path); err != nil {
+						readErr <- err
+						return
+					}
+					if first {
+						close(started)
+						first = false
+					}
+					select {
+					case <-stop:
+						return
+					default:
+					}
+				}
+			}()
+			<-started
+			for range 250 {
+				if err := writeJSONAtomic(path, test.value); err != nil {
+					close(stop)
+					<-done
+					t.Fatal(err)
+				}
+			}
+			close(stop)
+			<-done
+			select {
+			case err := <-readErr:
+				t.Fatal(err)
+			default:
+			}
+		})
 	}
 }
 
@@ -167,7 +256,7 @@ func TestRequestStopRejectsAbsentOrMismatchedManagedWorker(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer claim.Release()
-	if _, err := claim.WriteHeartbeat("wrong-deployment", profile.Name, StateReady, time.Now()); err != nil {
+	if _, err := claim.WriteHeartbeat("wrong-deployment", profile.Name, StateReady, controlTestWorldRef(), time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	defer workerclaim.RemoveHeartbeat(workspace)
@@ -190,10 +279,14 @@ func claimedControlProfile(t *testing.T) (hqprofile.Profile, *workerclaim.Claim)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := claim.WriteHeartbeat(profile.DeploymentID, profile.Name, StateReady, time.Now()); err != nil {
+	if _, err := claim.WriteHeartbeat(profile.DeploymentID, profile.Name, StateReady, controlTestWorldRef(), time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	return profile, claim
+}
+
+func controlTestWorldRef() core.WorldRef {
+	return core.WorldRef{WorldID: "world.control-test", Digest: "sha256:" + strings.Repeat("0", 64)}
 }
 
 func waitFreshOwner(t *testing.T, profile hqprofile.Profile, timeout time.Duration) workerclaim.Owner {

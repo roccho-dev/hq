@@ -57,8 +57,9 @@ func TestManagedWorkerProcessesDataOnlyLocalToolWithoutHostCapability(t *testing
 		t.Fatal(err)
 	}
 	worldPath := filepath.Join(root, "world.jsonl")
-	world := `{"kind":"hq.local-tool.v1","tool_id":"dummy","tool_version":"1","binding_ref":"local-tool.dummy","binding_contract_version":"1","actions":[{"action_id":"proof","argv":[{"literal":"-test.run=^TestManagedLocalToolHelperProcess$"},{"literal":"--"},{"literal":"--managed-local-tool-proof"}],"stdin":{"mode":"none","max_bytes":0},"limits":{"timeout_ms":2000,"stdout_bytes":4096,"stderr_bytes":4096},"output":{"format":"text"},"lifecycle":"one-shot","risk":"low","approval":"explicit"}]}
-{"kind":"hq.command.v1","name":"dummy.proof","instruction":{"version":"instruction.v1","op":"run","target":"local-tool","payload":{"tool_id":"dummy","tool_version":"1","action_id":"proof","input":{}}}}` + "\n"
+	world := `{"kind":"hq.world.v1","world_id":"world.local-tool-test"}
+{"kind":"hq.local-tool.v1","tool_id":"dummy","tool_version":"1","binding_ref":"local-tool.dummy","binding_contract_version":"1","actions":[{"action_id":"proof","argv":[{"literal":"-test.run=^TestManagedLocalToolHelperProcess$"},{"literal":"--"},{"literal":"--managed-local-tool-proof"}],"stdin":{"mode":"none","max_bytes":0},"limits":{"timeout_ms":2000,"stdout_bytes":4096,"stderr_bytes":4096},"output":{"format":"text"},"lifecycle":"one-shot","risk":"low","approval":"explicit"}]}
+{"kind":"hq.command.v1","command_id":"dummy.proof","command_version":"1","name":"dummy.proof","instruction":{"version":"instruction.v1","op":"run","target":"local-tool","payload":{"tool_id":"dummy","tool_version":"1","action_id":"proof","input":{}}}}` + "\n"
 	if err := os.WriteFile(worldPath, []byte(world), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +116,7 @@ func TestManagedWorkerProcessesDataOnlyLocalToolWithoutHostCapability(t *testing
 		time.Sleep(20 * time.Millisecond)
 		health = HealthCheck(profile, time.Now())
 	}
-	if !health.Ready {
+	if !health.Ready || health.Kind != HealthKind || health.SelectedWorld == nil || health.SelectedWorld.WorldID != "world.local-tool-test" {
 		cancel()
 		t.Fatalf("health=%+v", health)
 	}
