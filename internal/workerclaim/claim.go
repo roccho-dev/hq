@@ -4,7 +4,7 @@
 package workerclaim
 
 import (
-	"bufio"
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"hq/internal/atomicfile"
 	"hq/internal/workersafety"
 )
 
@@ -87,8 +88,8 @@ func (c *Claim) Path() string {
 	return c.path
 }
 
-// Acquire uses O_CREATE|O_EXCL so separate processes on the same local
-// filesystem cannot both become the execution owner.
+// Acquire publishes a complete owner record with an exclusive hard link so
+// separate processes on the same local filesystem cannot both become owner.
 func Acquire(projectRoot, workerID string, now time.Time) (*Claim, error) {
 	if strings.TrimSpace(workerID) == "" {
 		return nil, errors.New("worker id is required")
@@ -113,16 +114,15 @@ func Acquire(projectRoot, workerID string, now time.Time) (*Claim, error) {
 		Kind: OwnerKind, ClaimID: claimID, WorkerID: workerID, ProcessID: os.Getpid(),
 		Workspace: layout.ProjectRoot, StartedAt: now.UTC(),
 	}
-	file, err := os.OpenFile(claimPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if os.IsExist(err) {
-		inspection, inspectErr := Inspect(root, now, 0)
-		if inspectErr != nil {
-			inspection = Inspection{Kind: InspectionKind, Exists: true, ClaimPath: claimPath, ReadError: inspectErr.Error()}
-		}
-		return nil, &ConflictError{Inspection: inspection}
-	}
+	file, err := os.CreateTemp(filepath.Dir(claimPath), ".hq-worker-claim-*.tmp")
 	if err != nil {
 		return nil, fmt.Errorf("acquire worker claim: %w", err)
+	}
+	temporaryPath := file.Name()
+	defer os.Remove(temporaryPath)
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("secure worker claim: %w", err)
 	}
 	encoder := json.NewEncoder(file)
 	encoder.SetEscapeHTML(false)
@@ -132,12 +132,19 @@ func Acquire(projectRoot, workerID string, now time.Time) (*Claim, error) {
 	}
 	closeErr := file.Close()
 	if writeErr != nil {
-		_ = os.Remove(claimPath)
 		return nil, fmt.Errorf("write worker claim: %w", writeErr)
 	}
 	if closeErr != nil {
-		_ = os.Remove(claimPath)
 		return nil, fmt.Errorf("close worker claim: %w", closeErr)
+	}
+	if err := os.Link(temporaryPath, claimPath); os.IsExist(err) {
+		inspection, inspectErr := Inspect(root, now, 0)
+		if inspectErr != nil {
+			inspection = Inspection{Kind: InspectionKind, Exists: true, ClaimPath: claimPath, ReadError: inspectErr.Error()}
+		}
+		return nil, &ConflictError{Inspection: inspection}
+	} else if err != nil {
+		return nil, fmt.Errorf("publish worker claim: %w", err)
 	}
 	return &Claim{path: claimPath, owner: owner}, nil
 }
@@ -154,7 +161,7 @@ func (c *Claim) Release() error {
 	if current.ClaimID != c.owner.ClaimID || current.WorkerID != c.owner.WorkerID || current.Workspace != c.owner.Workspace {
 		return errors.New("claim identity changed; refusing release")
 	}
-	if err := os.Remove(c.path); err != nil {
+	if err := atomicfile.Remove(c.path); err != nil {
 		return fmt.Errorf("release worker claim: %w", err)
 	}
 	c.path = ""
@@ -226,7 +233,7 @@ func Recover(projectRoot, expectedClaimID, reason string, now time.Time, staleAf
 	if current.ClaimID != expectedClaimID {
 		return RecoveryReceipt{}, errors.New("claim changed during recovery; refusing removal")
 	}
-	if err := os.Remove(inspection.ClaimPath); err != nil {
+	if err := atomicfile.Remove(inspection.ClaimPath); err != nil {
 		return RecoveryReceipt{}, fmt.Errorf("remove recovered worker claim: %w", err)
 	}
 	return receipt, nil
@@ -248,12 +255,11 @@ func canonicalProjectRoot(projectRoot string) (string, error) {
 }
 
 func readOwner(path string) (Owner, error) {
-	file, err := os.Open(path)
+	data, err := atomicfile.Read(path)
 	if err != nil {
 		return Owner{}, err
 	}
-	defer file.Close()
-	decoder := json.NewDecoder(bufio.NewReader(file))
+	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	var owner Owner
 	if err := decoder.Decode(&owner); err != nil {
