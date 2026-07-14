@@ -233,7 +233,15 @@ jobs:
             gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS --dir existing
             cmp existing/SHA256SUMS dist/SHA256SUMS
           else
-            gh release create "$tag" dist/* \
+            gh release create "$tag" \
+              dist/hq-linux-amd64 \
+              dist/hq-worker-linux-amd64 \
+              dist/hq-windows-amd64.exe \
+              dist/hq-worker-windows-amd64.exe \
+              dist/manifest-linux-amd64.json \
+              dist/manifest-windows-amd64.json \
+              dist/hq-product-manifest.json \
+              dist/SHA256SUMS \
               --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
               --title "hq official artifact ${GITHUB_SHA:0:12}" \
