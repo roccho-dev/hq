@@ -22,15 +22,15 @@ exact hq proposals commit
 | Concern | Authority |
 |---|---|
 | product source | one exact commit on `roccho-dev/hq@proposals` |
-| official producer | `.github/workflows/official-hq-proof.yml` at that commit |
+| official producer, publisher, and readback | `.github/workflows/official-hq-proof.yml` at that commit |
 | immutable release | `hq-artifact-<full source SHA>` |
 | artifact bytes | the release assets named by `SHA256SUMS` |
 | platform metadata | `manifest-linux-amd64.json` and `manifest-windows-amd64.json` |
 | product family metadata | `hq-product-manifest.json` |
-| complete publication readback | successful `.github/workflows/verify-official-release.yml` and tag `hq-artifact-verified-<full source SHA>` |
+| complete publication evidence | successful inline release readback and tag `hq-artifact-verified-<full source SHA>` |
 | placement, binding, profile activation, and supervision | `roccho-dev/envs` using exact release asset digests |
 
-The verified tag is evidence that the complete release was downloaded and checked. It is not a second artifact authority and must point to the same source commit as the release target.
+The verified tag is evidence that the complete release was downloaded and checked by the same bounded publisher job. It is not a second artifact authority and must point to the same source commit as the release target.
 
 ## Official binary family
 
@@ -82,18 +82,19 @@ manifest-windows-amd64.json
 hq-product-manifest.json
 ```
 
-The release verifier must:
+The official publisher must complete release readback before success:
 
 1. select only the release for the current exact `proposals` SHA;
-2. download `SHA256SUMS` from that release;
-3. reject unknown or unsafe authoritative filenames;
-4. download every listed authoritative file from that same release;
+2. require exactly the expected eight release asset names: `SHA256SUMS` plus the seven authoritative files;
+3. download every release asset from that same release after publication;
+4. reject missing, additional, unknown, or unsafe authoritative filenames;
 5. require exactly seven checksum rows;
 6. run `sha256sum -c` over all seven files;
-7. require both platform manifests to identify the exact source SHA and Go `1.23.12`;
-8. require the product manifest to identify two builds and exactly the four official binaries;
-9. create `hq-artifact-verified-<full source SHA>` only after all checks pass;
-10. never move an existing verified tag to another commit.
+7. compare every downloaded asset byte-for-byte with the files prepared for publication;
+8. require both platform manifests to identify the exact source SHA and Go `1.23.12`;
+9. require the product manifest to identify two builds and exactly the four official binaries;
+10. create `hq-artifact-verified-<full source SHA>` only after all checks pass;
+11. never move an existing verified tag to another commit.
 
 A release tag without the verified tag is not sufficient closure evidence. A verified tag without an exact matching release and checksums is invalid by construction.
 
@@ -144,7 +145,7 @@ That run remains historical negative evidence. It is not an official artifact an
 
 | Repository | Owns | Must not own |
 |---|---|---|
-| `hq` | product source, official producer, manifests, immutable release, release readback | target placement, profile activation, service layout |
+| `hq` | product source, official producer, publisher, manifests, immutable release, inline release readback | target placement, profile activation, service layout |
 | `envs` | exact target selection, verified binding, placement, activation, supervision, deployment evidence | hq source, queue meaning, worker semantics, canonical result meaning |
 | `edits` | Vim client integration and user-visible conformance | hq artifact production or target placement |
 | `adrs` | accepted architecture and closure evidence map | generated artifact bytes or runtime state |
@@ -153,6 +154,6 @@ That run remains historical negative evidence. It is not an official artifact an
 
 - `roccho-dev/hq#95`
 - `roccho-dev/hq#98`
-- merged PRs `#130`, `#133`, `#135`, `#136`, and `#137`
+- merged PRs `#130`, `#133`, `#135`, `#136`, `#137`, and `#138`
 - `roccho-dev/envs#34`
 - `roccho-dev/adrs#220`
