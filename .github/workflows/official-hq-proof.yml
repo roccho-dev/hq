@@ -277,12 +277,16 @@ jobs:
             (.artifacts | length == 4)
           ' release-readback/assets/hq-product-manifest.json >/dev/null
 
-          existing_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$verified_tag" --jq .object.sha 2>/dev/null || true)"
-          if test -n "$existing_sha"; then
-            test "$existing_sha" = "$GITHUB_SHA"
+          checksum_digest="$(sha256sum release-readback/assets/SHA256SUMS | awk '{print $1}')"
+          if gh release view "$verified_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            test "$(gh release view "$verified_tag" --repo "$GITHUB_REPOSITORY" --json targetCommitish --jq .targetCommitish)" = "$GITHUB_SHA"
+            test "$(gh release view "$verified_tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets | length')" = "0"
           else
-            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
-              -f ref="refs/tags/$verified_tag" \
-              -f sha="$GITHUB_SHA" >/dev/null
+            gh release create "$verified_tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "hq official artifact verified ${GITHUB_SHA:0:12}" \
+              --notes "Complete readback of $tag succeeded. All eight release assets matched the prepared publication; SHA256SUMS digest: $checksum_digest. This zero-asset marker is evidence only."
           fi
-          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$verified_tag" --jq .object.sha)" = "$GITHUB_SHA"
+          test "$(gh release view "$verified_tag" --repo "$GITHUB_REPOSITORY" --json targetCommitish --jq .targetCommitish)" = "$GITHUB_SHA"
+          test "$(gh release view "$verified_tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets | length')" = "0"
