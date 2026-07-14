@@ -4,28 +4,19 @@ on:
   pull_request:
     paths:
       - .github/workflows/verify-official-release.yml
-  workflow_run:
-    workflows:
-      - Official hq artifacts
-    types:
-      - completed
+  push:
+    branches:
+      - proposals
 
 permissions:
   contents: write
 
 jobs:
   verify-release:
-    if: >-
-      github.event_name == 'pull_request' ||
-      (
-        github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.event == 'push' &&
-        github.event.workflow_run.head_branch == 'proposals'
-      )
     runs-on: ubuntu-latest
     env:
-      SOURCE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.workflow_run.head_sha }}
-      CREATE_VERIFIED_TAG: ${{ github.event_name == 'workflow_run' && 'true' || 'false' }}
+      SOURCE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
+      CREATE_VERIFIED_TAG: ${{ github.event_name == 'push' && 'true' || 'false' }}
     steps:
       - name: Download and verify every authoritative release asset
         env:
@@ -36,7 +27,16 @@ jobs:
           release_tag="hq-artifact-$SOURCE_SHA"
           verified_tag="hq-artifact-verified-$SOURCE_SHA"
 
+          if test "$CREATE_VERIFIED_TAG" = "true"; then
+            for attempt in $(seq 1 60); do
+              if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+                break
+              fi
+              sleep 5
+            done
+          fi
           gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null
+
           rm -rf release-readback
           mkdir release-readback
           gh release download "$release_tag" \
