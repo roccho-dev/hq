@@ -1,0 +1,90 @@
+name: Verify official hq release
+
+on:
+  workflow_run:
+    workflows:
+      - Official hq artifacts
+    types:
+      - completed
+
+permissions:
+  contents: write
+
+jobs:
+  verify-release:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'proposals'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download and verify every authoritative release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_tag="hq-artifact-$SOURCE_SHA"
+          verified_tag="hq-artifact-verified-$SOURCE_SHA"
+
+          gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null
+          rm -rf release-readback
+          mkdir release-readback
+          gh release download "$release_tag" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern SHA256SUMS \
+            --dir release-readback
+
+          while read -r expected name; do
+            test -n "$expected"
+            case "$name" in
+              hq-linux-amd64|hq-worker-linux-amd64|hq-windows-amd64.exe|hq-worker-windows-amd64.exe|manifest-linux-amd64.json|manifest-windows-amd64.json|hq-product-manifest.json)
+                ;;
+              *)
+                echo "unexpected or unsafe authoritative asset name: $name" >&2
+                exit 1
+                ;;
+            esac
+            gh release download "$release_tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --pattern "$name" \
+              --dir release-readback
+          done < release-readback/SHA256SUMS
+
+          test "$(wc -l < release-readback/SHA256SUMS)" -eq 7
+          (
+            cd release-readback
+            sha256sum -c SHA256SUMS
+          )
+
+          test "$(jq -r .kind release-readback/manifest-linux-amd64.json)" = "hq.officialArtifact.v1"
+          test "$(jq -r .kind release-readback/manifest-windows-amd64.json)" = "hq.officialArtifact.v1"
+          test "$(jq -r .source_sha release-readback/manifest-linux-amd64.json)" = "$SOURCE_SHA"
+          test "$(jq -r .source_sha release-readback/manifest-windows-amd64.json)" = "$SOURCE_SHA"
+          test "$(jq -r .go_version release-readback/manifest-linux-amd64.json)" = "go1.23.12"
+          test "$(jq -r .go_version release-readback/manifest-windows-amd64.json)" = "go1.23.12"
+
+          jq -e --arg source_sha "$SOURCE_SHA" '
+            .kind == "hq.officialProduct.v1" and
+            .source_sha == $source_sha and
+            (.builds | length == 2) and
+            (.artifacts | length == 4) and
+            ([.artifacts[].name] | sort) == ([
+              "hq-linux-amd64",
+              "hq-worker-linux-amd64",
+              "hq-windows-amd64.exe",
+              "hq-worker-windows-amd64.exe"
+            ] | sort)
+          ' release-readback/hq-product-manifest.json >/dev/null
+
+          existing_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$verified_tag" --jq .object.sha 2>/dev/null || true)"
+          if test -n "$existing_sha"; then
+            test "$existing_sha" = "$SOURCE_SHA"
+          else
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f ref="refs/tags/$verified_tag" \
+              -f sha="$SOURCE_SHA" >/dev/null
+          fi
+
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$verified_tag" --jq .object.sha)" = "$SOURCE_SHA"
