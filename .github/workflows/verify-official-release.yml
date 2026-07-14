@@ -1,6 +1,9 @@
 name: Verify official hq release
 
 on:
+  pull_request:
+    paths:
+      - .github/workflows/verify-official-release.yml
   workflow_run:
     workflows:
       - Official hq artifacts
@@ -13,15 +16,20 @@ permissions:
 jobs:
   verify-release:
     if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_branch == 'proposals'
+      github.event_name == 'pull_request' ||
+      (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'proposals'
+      )
     runs-on: ubuntu-latest
+    env:
+      SOURCE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.workflow_run.head_sha }}
+      CREATE_VERIFIED_TAG: ${{ github.event_name == 'workflow_run' && 'true' || 'false' }}
     steps:
       - name: Download and verify every authoritative release asset
         env:
           GH_TOKEN: ${{ github.token }}
-          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -77,6 +85,10 @@ jobs:
               "hq-worker-windows-amd64.exe"
             ] | sort)
           ' release-readback/hq-product-manifest.json >/dev/null
+
+          if test "$CREATE_VERIFIED_TAG" != "true"; then
+            exit 0
+          fi
 
           existing_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$verified_tag" --jq .object.sha 2>/dev/null || true)"
           if test -n "$existing_sha"; then
