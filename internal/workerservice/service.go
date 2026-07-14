@@ -268,7 +268,7 @@ func pendingRows(rows []worker.ReadRow, prior worker.LogData) []worker.ReadRow {
 	}
 	out := make([]worker.ReadRow, 0, len(rows))
 	for _, row := range rows {
-		if row.ParseError != nil && validatedLines[row.Source.Line] {
+		if validatedLines[row.Source.Line] {
 			continue
 		}
 		if result, exists := latest[row.Instruction.ID]; exists && isTerminal(result.Kind) {
