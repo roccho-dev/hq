@@ -1,10 +1,13 @@
-name: Official hq proof
+name: Official hq artifacts
 
 on:
   pull_request:
   push:
     branches:
-      - main
+      - proposals
+
+permissions:
+  contents: read
 
 jobs:
   linux-official-hq-proof:
@@ -13,16 +16,56 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.23.x"
-      - run: bash scripts/check.sh
-      - name: Build official Linux hq binary
+          go-version: "1.23.12"
+      - name: Build clean official Linux product binaries
+        shell: bash
         run: |
-          mkdir -p artifacts
-          go build -o artifacts/hq-linux-amd64 ./cmd/hq
+          set -euo pipefail
+          test -z "$(git status --porcelain)"
+          build_dir="$RUNNER_TEMP/hq-official-linux-amd64"
+          rm -rf "$build_dir"
+          mkdir -p "$build_dir" artifacts/official
+          go build -trimpath -o "$build_dir/hq-linux-amd64" ./cmd/hq
+          go build -trimpath -o "$build_dir/hq-worker-linux-amd64" ./cmd/hq-worker
+          test -z "$(git status --porcelain)"
+          cp "$build_dir/hq-linux-amd64" artifacts/official/hq-linux-amd64
+          cp "$build_dir/hq-worker-linux-amd64" artifacts/official/hq-worker-linux-amd64
+          source_sha="$(git rev-parse HEAD)"
+          go_version="$(go env GOVERSION)"
+          for binary in artifacts/official/hq-linux-amd64 artifacts/official/hq-worker-linux-amd64; do
+            go version -m "$binary" | tee "$binary.buildinfo.txt"
+            go version -m "$binary" | grep -F "vcs.revision=$source_sha"
+            if go version -m "$binary" | grep -F 'vcs.modified=true'; then
+              echo "official binary was built from a modified tree: $binary" >&2
+              exit 1
+            fi
+            go version -m "$binary" | grep -F 'vcs.modified=false'
+          done
+          hq_sha="$(sha256sum artifacts/official/hq-linux-amd64 | awk '{print $1}')"
+          worker_sha="$(sha256sum artifacts/official/hq-worker-linux-amd64 | awk '{print $1}')"
+          cat > artifacts/official/manifest-linux-amd64.json <<EOF
+          {
+            "kind": "hq.officialArtifact.v1",
+            "source_sha": "$source_sha",
+            "go_version": "$go_version",
+            "os": "linux",
+            "arch": "amd64",
+            "artifacts": [
+              {"name": "hq-linux-amd64", "sha256": "$hq_sha"},
+              {"name": "hq-worker-linux-amd64", "sha256": "$worker_sha"}
+            ]
+          }
+          EOF
+          (
+            cd artifacts/official
+            sha256sum hq-linux-amd64 hq-worker-linux-amd64 manifest-linux-amd64.json > SHA256SUMS-linux-amd64
+          )
+      - name: Run repository checks after official build
+        run: bash scripts/check.sh
       - name: Prove official Linux Tab completion
         run: |
           python3 scripts/pty-tab-proof-v2.py \
-            ./artifacts/hq-linux-amd64 \
+            ./artifacts/official/hq-linux-amd64 \
             artifacts/official-hq-interactive-tab-proof-linux.txt
       - name: Require official Linux proof markers
         run: |
@@ -34,13 +77,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: hq-official-proof-linux
-          path: |
-            artifacts/go-test.log
-            artifacts/hq-linux-amd64
-            artifacts/official-hq-interactive-tab-proof-linux.txt
-            artifacts/vim-hq-contract-proof-linux.json
-          if-no-files-found: warn
+          name: hq-official-linux-amd64-${{ github.sha }}
+          path: artifacts/official/
+          if-no-files-found: error
 
   windows-official-hq-proof:
     runs-on: windows-latest
@@ -48,33 +87,72 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.23.x"
+          go-version: "1.23.12"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.x"
+      - name: Build clean official Windows product binaries
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (git status --porcelain) { throw 'source tree is not clean before official build' }
+          $buildDir = Join-Path $env:RUNNER_TEMP 'hq-official-windows-amd64'
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $buildDir
+          New-Item -ItemType Directory -Force $buildDir | Out-Null
+          New-Item -ItemType Directory -Force artifacts\official | Out-Null
+          go build -trimpath -o (Join-Path $buildDir 'hq-windows-amd64.exe') ./cmd/hq
+          go build -trimpath -o (Join-Path $buildDir 'hq-worker-windows-amd64.exe') ./cmd/hq-worker
+          if (git status --porcelain) { throw 'source tree changed during official build' }
+          Copy-Item -LiteralPath (Join-Path $buildDir 'hq-windows-amd64.exe') -Destination artifacts\official\hq-windows-amd64.exe
+          Copy-Item -LiteralPath (Join-Path $buildDir 'hq-worker-windows-amd64.exe') -Destination artifacts\official\hq-worker-windows-amd64.exe
+          $sourceSha = (git rev-parse HEAD).Trim()
+          $goVersion = (go env GOVERSION).Trim()
+          foreach ($binary in @('artifacts\official\hq-windows-amd64.exe', 'artifacts\official\hq-worker-windows-amd64.exe')) {
+            $buildInfo = go version -m $binary
+            $buildInfo | Set-Content -Encoding utf8 "$binary.buildinfo.txt"
+            if (-not ($buildInfo | Select-String -SimpleMatch "vcs.revision=$sourceSha")) { throw "binary revision does not match source: $binary" }
+            if ($buildInfo | Select-String -SimpleMatch 'vcs.modified=true') { throw "official binary was built from a modified tree: $binary" }
+            if (-not ($buildInfo | Select-String -SimpleMatch 'vcs.modified=false')) { throw "binary lacks clean VCS evidence: $binary" }
+          }
+          $hqSha = (Get-FileHash -Algorithm SHA256 artifacts\official\hq-windows-amd64.exe).Hash.ToLowerInvariant()
+          $workerSha = (Get-FileHash -Algorithm SHA256 artifacts\official\hq-worker-windows-amd64.exe).Hash.ToLowerInvariant()
+          $manifest = [ordered]@{
+            kind = 'hq.officialArtifact.v1'
+            source_sha = $sourceSha
+            go_version = $goVersion
+            os = 'windows'
+            arch = 'amd64'
+            artifacts = @(
+              [ordered]@{name='hq-windows-amd64.exe'; sha256=$hqSha},
+              [ordered]@{name='hq-worker-windows-amd64.exe'; sha256=$workerSha}
+            )
+          }
+          $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifacts\official\manifest-windows-amd64.json
+          @(
+            "$hqSha  hq-windows-amd64.exe",
+            "$workerSha  hq-worker-windows-amd64.exe",
+            "$((Get-FileHash -Algorithm SHA256 artifacts\official\manifest-windows-amd64.json).Hash.ToLowerInvariant())  manifest-windows-amd64.json"
+          ) | Set-Content -Encoding ascii artifacts\official\SHA256SUMS-windows-amd64
       - name: Install Windows terminal proof dependency
         shell: pwsh
         run: |
           python -m pip install --disable-pip-version-check --quiet --upgrade pip
           python -m pip install --disable-pip-version-check --quiet "setuptools==80.9.0" wexpect
           python -c "import pkg_resources; import wexpect; print('windows terminal proof deps ok')"
-      - name: Build official Windows hq binary
+      - name: Run repository tests after official build
         shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force artifacts | Out-Null
-          go test ./...
-          go build -o artifacts/hq-windows-amd64.exe ./cmd/hq
+        run: go test ./...
       - name: Prove Vim-to-hq contract on Windows
         shell: pwsh
         run: |
           python scripts/vim-hq-contract-proof.py `
-            --binary artifacts\hq-windows-amd64.exe `
+            --binary artifacts\official\hq-windows-amd64.exe `
             --artifact artifacts\vim-hq-contract-proof-windows.json
       - name: Prove official Windows Tab completion
         shell: pwsh
         run: |
           python scripts/windows-tab-proof-v2.py `
-            .\artifacts\hq-windows-amd64.exe `
+            .\artifacts\official\hq-windows-amd64.exe `
             artifacts\official-hq-interactive-tab-proof-windows.txt
       - name: Require Windows literal Tab proof markers
         shell: pwsh
@@ -88,9 +166,58 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: hq-official-proof-windows
-          path: |
-            artifacts/hq-windows-amd64.exe
-            artifacts/official-hq-interactive-tab-proof-windows.txt
-            artifacts/vim-hq-contract-proof-windows.json
+          name: hq-official-windows-amd64-${{ github.sha }}
+          path: artifacts\official\
           if-no-files-found: error
+
+  publish-official-product:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/proposals'
+    needs:
+      - linux-official-hq-proof
+      - windows-official-hq-proof
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: hq-official-linux-amd64-${{ github.sha }}
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: hq-official-windows-amd64-${{ github.sha }}
+          path: dist
+      - name: Verify and publish immutable commit release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(jq -r .source_sha dist/manifest-linux-amd64.json)" = "$GITHUB_SHA"
+          test "$(jq -r .source_sha dist/manifest-windows-amd64.json)" = "$GITHUB_SHA"
+          jq -s --arg source_sha "$GITHUB_SHA" '{
+            kind: "hq.officialProduct.v1",
+            source_sha: $source_sha,
+            builds: map({os, arch, go_version}),
+            artifacts: map(.artifacts[])
+          }' dist/manifest-linux-amd64.json dist/manifest-windows-amd64.json > dist/hq-product-manifest.json
+          (
+            cd dist
+            sha256sum \
+              hq-linux-amd64 hq-worker-linux-amd64 \
+              hq-windows-amd64.exe hq-worker-windows-amd64.exe \
+              manifest-linux-amd64.json manifest-windows-amd64.json \
+              hq-product-manifest.json > SHA256SUMS
+          )
+          tag="hq-artifact-$GITHUB_SHA"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            mkdir -p existing
+            gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS --dir existing
+            cmp existing/SHA256SUMS dist/SHA256SUMS
+            exit 0
+          fi
+          gh release create "$tag" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "hq official artifact ${GITHUB_SHA:0:12}" \
+            --notes "One clean source commit produced the official Linux and native Windows hq/hq-worker artifact family. See hq-product-manifest.json and SHA256SUMS."
