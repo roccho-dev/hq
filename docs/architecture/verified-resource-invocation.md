@@ -52,6 +52,14 @@ A structurally valid invocation with no current exact approval produces:
 
 That accepted run remains queued. Re-polling without any state change appends no duplicate held evidence. When an approval matching the exact instruction digest appears, the same run ID becomes runnable and proceeds through the normal worker lifecycle.
 
+Finite actions retain the existing one-step product path: explicit `hq.submit` supplies their digest-bound execution approval. Resource invocation separates queue admission from execution permission. After reviewing the exact accepted instruction, an operator records the second explicit operation:
+
+```text
+hq approve --profile <name> --instruction <id> --approved-by <identity>
+```
+
+The command appends one idempotent `worker.approval.v1` row beneath `<workspace>/.hq/approvals.jsonl`. The managed worker rereads that append-only ledger on each poll. An identical repeat is a no-op; conflicting reuse of an instruction ID fails closed. The approval does not create another queue or mutate the accepted instruction.
+
 Malformed payloads and stale approvals are immediately non-green. Resource-policy rejection, missing resource, binding mismatch, and executable tamper are checked after exact approval but before process effect; they produce terminal non-green evidence and zero process start. No denied invocation can reach `started` through a successful provider preparation.
 
 ## Resource policy
@@ -91,7 +99,7 @@ The implementation PR must prove deterministically:
 1. one resource definition prepares at least three distinct AWS-shaped argv vectors with zero actions;
 2. literal shell punctuation remains one argument;
 3. denied profile, endpoint, response-file, file-indirection, secret-shaped, limit, policy-drift, stale-approval, unknown-resource, stale-binding, and executable-tamper cases start zero process;
-4. missing approval remains durably held and later exact approval resumes the same run exactly once;
+4. the managed worker leaves missing approval durably held, `hq approve` appends one exact record, and later exact approval resumes the same run exactly once;
 5. existing finite-action behavior remains green.
 
 Closing adrs#222 additionally requires a physical restricted-AWS proof and final exact readback. This repository PR does not manufacture cloud evidence.
