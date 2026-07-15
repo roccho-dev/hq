@@ -4,14 +4,13 @@ package worker
 
 import (
 	"os"
-
-	"golang.org/x/sys/unix"
+	"syscall"
 )
 
 func lockWorkspaceApprovalFile(file *os.File) error {
-	return unix.Flock(int(file.Fd()), unix.LOCK_EX)
+	return syscall.Flock(int(file.Fd()), syscall.LOCK_EX)
 }
 
 func unlockWorkspaceApprovalFile(file *os.File) error {
-	return unix.Flock(int(file.Fd()), unix.LOCK_UN)
+	return syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
 }
