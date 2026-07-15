@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"hq/internal/localtoolpolicy"
 )
 
 type Contract struct {
@@ -128,21 +130,68 @@ func validatePayload(target string, raw json.RawMessage) []Diagnostic {
 }
 
 func validateLocalToolPayload(payload map[string]json.RawMessage) []Diagnostic {
-	allowed := map[string]struct{}{"tool_id": {}, "tool_version": {}, "action_id": {}, "input": {}}
+	allowed := map[string]struct{}{
+		"tool_id": {}, "tool_version": {},
+		"action_id": {}, "input": {},
+		"policy_version": {}, "argv": {},
+	}
 	for key := range payload {
 		if _, ok := allowed[key]; !ok {
 			return []Diagnostic{invalid("invalid_payload", "payload."+key, "unsupported local-tool payload field")}
 		}
 	}
-	for _, field := range []string{"tool_id", "tool_version", "action_id"} {
+	for _, field := range []string{"tool_id", "tool_version"} {
 		var value string
 		if json.Unmarshal(payload[field], &value) != nil || strings.TrimSpace(value) == "" {
 			return []Diagnostic{invalid("invalid_payload", "payload."+field, field+" must be a non-empty string")}
 		}
 	}
-	var input map[string]json.RawMessage
-	if json.Unmarshal(payload["input"], &input) != nil || input == nil {
-		return []Diagnostic{invalid("invalid_payload", "payload.input", "input must be a JSON object")}
+	_, hasActionID := payload["action_id"]
+	_, hasInput := payload["input"]
+	_, hasPolicyVersion := payload["policy_version"]
+	_, hasArgv := payload["argv"]
+	finite := hasActionID || hasInput
+	invocation := hasPolicyVersion || hasArgv
+	if finite == invocation {
+		return []Diagnostic{invalid("invalid_payload", "payload", "local-tool payload must be exactly one finite action or one verified-resource invocation")}
+	}
+	if finite {
+		if !hasActionID || !hasInput {
+			return []Diagnostic{invalid("invalid_payload", "payload", "finite local-tool payload requires action_id and input")}
+		}
+		var actionID string
+		if json.Unmarshal(payload["action_id"], &actionID) != nil || strings.TrimSpace(actionID) == "" {
+			return []Diagnostic{invalid("invalid_payload", "payload.action_id", "action_id must be a non-empty string")}
+		}
+		var input map[string]json.RawMessage
+		if json.Unmarshal(payload["input"], &input) != nil || input == nil {
+			return []Diagnostic{invalid("invalid_payload", "payload.input", "input must be a JSON object")}
+		}
+		return nil
+	}
+	if !hasPolicyVersion || !hasArgv {
+		return []Diagnostic{invalid("invalid_payload", "payload", "verified-resource invocation requires policy_version and argv")}
+	}
+	var policyVersion string
+	if json.Unmarshal(payload["policy_version"], &policyVersion) != nil || strings.TrimSpace(policyVersion) == "" {
+		return []Diagnostic{invalid("invalid_payload", "payload.policy_version", "policy_version must be a non-empty string")}
+	}
+	var argv []string
+	if json.Unmarshal(payload["argv"], &argv) != nil || len(argv) == 0 {
+		return []Diagnostic{invalid("invalid_payload", "payload.argv", "argv must be a non-empty array of strings")}
+	}
+	if len(argv) > localtoolpolicy.MaxArgv {
+		return []Diagnostic{invalid("invalid_payload", "payload.argv", fmt.Sprintf("argv must contain at most %d arguments", localtoolpolicy.MaxArgv))}
+	}
+	total := 0
+	for index, argument := range argv {
+		if strings.TrimSpace(argument) == "" || strings.ContainsRune(argument, '\x00') {
+			return []Diagnostic{invalid("invalid_payload", fmt.Sprintf("payload.argv[%d]", index), "argument must be non-empty and contain no NUL")}
+		}
+		total += len([]byte(argument))
+		if total > localtoolpolicy.MaxArgBytes {
+			return []Diagnostic{invalid("invalid_payload", "payload.argv", fmt.Sprintf("argv must contain at most %d bytes", localtoolpolicy.MaxArgBytes))}
+		}
 	}
 	return nil
 }
