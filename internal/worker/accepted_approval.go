@@ -5,6 +5,10 @@ import (
 	"strings"
 )
 
+// ApprovalsForAccepted preserves the existing one-submit execution behavior for
+// finite operations. Verified-resource invocations are intentionally omitted:
+// their accepted row is queue admission only and requires a separate exact
+// worker.approval.v1 record before dispatch.
 func ApprovalsForAccepted(rows []ReadRow, approvedBy string) (ApprovalStore, error) {
 	if strings.TrimSpace(approvedBy) == "" {
 		return ApprovalStore{}, fmt.Errorf("approved_by is required")
@@ -12,7 +16,7 @@ func ApprovalsForAccepted(rows []ReadRow, approvedBy string) (ApprovalStore, err
 	store := EmptyApprovalStore()
 	validation := DefaultContract().ValidateRows(rows)
 	for i, row := range rows {
-		if len(validation[i]) != 0 {
+		if len(validation[i]) != 0 || IsVerifiedResourceInvocation(row.Instruction) {
 			continue
 		}
 		digest, err := InstructionDigest(row.Instruction)
