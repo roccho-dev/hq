@@ -70,7 +70,11 @@ type WorldRecallRank struct {
 	DirectCount        int
 	SubsequenceScore   int
 	RequiredPreference int
+	SourcePreference   int
 	CandidateKind      int
+	HistoryRecency     int64
+	HistoryFrequency   int
+	HistoryAware       bool
 }
 
 type WorldRecallQuery struct {
@@ -79,6 +83,7 @@ type WorldRecallQuery struct {
 	CommandName   string
 	FieldName     string
 	PresentFields map[string]bool
+	RecentOnly    bool
 }
 
 type WorldRecallResult struct {
@@ -120,28 +125,34 @@ type recallTerm struct {
 }
 
 type recallCandidate struct {
-	CandidateID     string
-	World           WorldRef
-	Command         CommandRef
-	StructuralRefs  []WorldRecallStructuralRef
-	Scope           WorldRecallScope
-	Kind            WorldRecallKind
-	CommandName     string
-	FieldName       string
-	Label           string
-	Detail          string
-	Description     string
-	Materialization string
-	Required        bool
-	Terms           []recallTerm
+	CandidateID      string
+	World            WorldRef
+	Command          CommandRef
+	StructuralRefs   []WorldRecallStructuralRef
+	IdentityRefs     []WorldRecallStructuralRef
+	Scope            WorldRecallScope
+	Kind             WorldRecallKind
+	CommandName      string
+	FieldName        string
+	Label            string
+	Detail           string
+	Description      string
+	Materialization  string
+	Required         bool
+	Terms            []recallTerm
+	SourcePreference int
+	HistoryRecency   int64
+	HistoryFrequency int
+	HistoryRecent    bool
 }
 
-// WorldRecallIndex is immutable after successful preparation and contains
-// only a projection of the selected semantic world.
+// WorldRecallIndex is immutable after successful preparation and contains a
+// projection of the selected semantic world plus optional in-memory history.
 type WorldRecallIndex struct {
 	id         string
 	world      WorldRef
 	candidates []recallCandidate
+	history    bool
 }
 
 func (index *WorldRecallIndex) ID() string {
@@ -229,32 +240,38 @@ func PrepareWorldRecall(world *JsonlWorld, identify WorldRecallCandidateIdentifi
 			}
 		}
 	}
-	seen := make(map[string]struct{}, len(index.candidates))
-	for candidateIndex := range index.candidates {
-		candidate := &index.candidates[candidateIndex]
+	if err := prepareRecallCandidates(index.candidates, identify); err != nil {
+		return nil, err
+	}
+	sort.Slice(index.candidates, func(i, j int) bool { return index.candidates[i].CandidateID < index.candidates[j].CandidateID })
+	return index, nil
+}
+
+func prepareRecallCandidates(candidates []recallCandidate, identify WorldRecallCandidateIdentifier) error {
+	seen := make(map[string]struct{}, len(candidates))
+	for candidateIndex := range candidates {
+		candidate := &candidates[candidateIndex]
 		prepareRecallTerms(candidate)
-		candidate.StructuralRefs = recallStructuralRefs(candidate.Terms)
-		candidate.CandidateID, err = identify(WorldRecallCandidateIdentity{
+		candidate.IdentityRefs = recallStructuralRefs(candidate.Terms)
+		if len(candidate.StructuralRefs) == 0 {
+			candidate.StructuralRefs = append([]WorldRecallStructuralRef(nil), candidate.IdentityRefs...)
+		} else {
+			candidate.StructuralRefs = mergeRecallRefs(candidate.IdentityRefs, candidate.StructuralRefs)
+		}
+		candidate.CandidateID, _ = identify(WorldRecallCandidateIdentity{
 			Kind: WorldRecallCandidateIDKind, CandidateKind: candidate.Kind,
 			World: candidate.World, Command: candidate.Command,
-			StructuralRefs:  append([]WorldRecallStructuralRef(nil), candidate.StructuralRefs...),
-			Materialization: candidate.Materialization,
+			StructuralRefs: append([]WorldRecallStructuralRef(nil), candidate.IdentityRefs...), Materialization: candidate.Materialization,
 		})
-		if err != nil || !ValidDigest(candidate.CandidateID) {
-			if err == nil {
-				err = errors.New("invalid canonical digest")
-			}
-			return nil, fmt.Errorf("world recall candidate identity: %w", err)
+		if !ValidDigest(candidate.CandidateID) {
+			return errors.New("world recall candidate identity is invalid")
 		}
 		if _, duplicate := seen[candidate.CandidateID]; duplicate {
-			return nil, fmt.Errorf("duplicate world recall candidate identity %q", candidate.CandidateID)
+			return fmt.Errorf("duplicate world recall candidate identity %q", candidate.CandidateID)
 		}
 		seen[candidate.CandidateID] = struct{}{}
 	}
-	sort.Slice(index.candidates, func(i, j int) bool {
-		return index.candidates[i].CandidateID < index.candidates[j].CandidateID
-	})
-	return index, nil
+	return nil
 }
 
 func (index *WorldRecallIndex) Recall(query WorldRecallQuery) []WorldRecallResult {
@@ -264,6 +281,9 @@ func (index *WorldRecallIndex) Recall(query WorldRecallQuery) []WorldRecallResul
 	tokens := normalizeRecallQuery(query.Text)
 	results := make([]WorldRecallResult, 0)
 	for _, candidate := range index.candidates {
+		if query.RecentOnly && !candidate.HistoryRecent {
+			continue
+		}
 		if candidate.Scope != query.Scope || (query.CommandName != "" && candidate.CommandName != query.CommandName) || (query.FieldName != "" && candidate.FieldName != query.FieldName) {
 			continue
 		}
@@ -274,17 +294,26 @@ func (index *WorldRecallIndex) Recall(query WorldRecallQuery) []WorldRecallResul
 		if !ok {
 			continue
 		}
-		rank := recallRank(candidate, matches)
+		rank := recallRank(candidate, matches, index.history)
 		results = append(results, WorldRecallResult{
 			CandidateID: candidate.CandidateID, World: candidate.World, Command: candidate.Command,
 			StructuralRefs: append([]WorldRecallStructuralRef(nil), candidate.StructuralRefs...),
-			Scope:          candidate.Scope, Kind: candidate.Kind, CommandName: candidate.CommandName,
+			Scope: candidate.Scope, Kind: candidate.Kind, CommandName: candidate.CommandName,
 			FieldName: candidate.FieldName, Label: candidate.Label, Detail: candidate.Detail,
 			Documentation: recallDocumentation(candidate, matches), Materialization: candidate.Materialization,
 			Matches: matches, Rank: rank,
 		})
 	}
 	sort.Slice(results, func(i, j int) bool { return lessRecallResult(results[i], results[j]) })
+	limit := 0
+	if query.RecentOnly {
+		limit = MaxRecentHistoryPresets
+	} else if index.history {
+		limit = MaxCombinedRecallResults
+	}
+	if limit > 0 && len(results) > limit {
+		results = results[:limit]
+	}
 	return results
 }
 
@@ -311,426 +340,66 @@ func validRecallCommandRef(ref CommandRef) bool {
 	return validStableIdentity(ref.CommandID) && validStableIdentity(ref.CommandVersion) && strings.TrimSpace(ref.Name) != "" && ValidDigest(ref.Digest)
 }
 
-type recallMatcherIdentity struct {
-	Module  string `json:"module"`
-	Version string `json:"version"`
-}
-
-type recallIndexIDPreimage struct {
-	Kind                 string                `json:"kind"`
-	WorldDigest          string                `json:"world_digest"`
-	NormalizationVersion string                `json:"normalization_version"`
-	Matcher              recallMatcherIdentity `json:"matcher"`
-	RankVersion          string                `json:"rank_version"`
-	MaterializerVersion  string                `json:"materializer_version"`
-}
+type recallMatcherIdentity struct { Module string `json:"module"`; Version string `json:"version"` }
+type recallIndexIDPreimage struct { Kind string `json:"kind"`; WorldDigest string `json:"world_digest"`; NormalizationVersion string `json:"normalization_version"`; Matcher recallMatcherIdentity `json:"matcher"`; RankVersion string `json:"rank_version"`; MaterializerVersion string `json:"materializer_version"` }
 
 func worldRecallIndexID(worldDigest string) (string, error) {
-	return CanonicalDigest(recallIndexIDPreimage{
-		Kind: WorldRecallIndexKind, WorldDigest: worldDigest,
-		NormalizationVersion: WorldRecallNormalizationVersion,
-		Matcher:              recallMatcherIdentity{Module: WorldRecallMatcherModule, Version: WorldRecallMatcherVersion},
-		RankVersion:          WorldRecallRankVersion, MaterializerVersion: CommandObjectMaterializerVersion,
-	})
+	return CanonicalDigest(recallIndexIDPreimage{Kind: WorldRecallIndexKind, WorldDigest: worldDigest, NormalizationVersion: WorldRecallNormalizationVersion, Matcher: recallMatcherIdentity{Module: WorldRecallMatcherModule, Version: WorldRecallMatcherVersion}, RankVersion: WorldRecallRankVersion, MaterializerVersion: CommandObjectMaterializerVersion})
 }
 
 func prepareRecallTerms(candidate *recallCandidate) {
-	for index := range candidate.Terms {
-		candidate.Terms[index].Folded = strings.ToLower(candidate.Terms[index].Text)
-	}
-	sort.Slice(candidate.Terms, func(i, j int) bool {
-		left, right := candidate.Terms[i], candidate.Terms[j]
-		if left.Kind != right.Kind {
-			return left.Kind < right.Kind
-		}
-		if left.Path != right.Path {
-			return left.Path < right.Path
-		}
-		return left.Text < right.Text
-	})
+	for index := range candidate.Terms { candidate.Terms[index].Folded = strings.ToLower(candidate.Terms[index].Text) }
+	sort.Slice(candidate.Terms, func(i, j int) bool { left, right := candidate.Terms[i], candidate.Terms[j]; if left.Kind != right.Kind { return left.Kind < right.Kind }; if left.Path != right.Path { return left.Path < right.Path }; return left.Text < right.Text })
 	unique := candidate.Terms[:0]
-	for _, term := range candidate.Terms {
-		if len(unique) == 0 || unique[len(unique)-1].Kind != term.Kind || unique[len(unique)-1].Path != term.Path || unique[len(unique)-1].Text != term.Text {
-			unique = append(unique, term)
-		}
-	}
+	for _, term := range candidate.Terms { if len(unique) == 0 || unique[len(unique)-1].Kind != term.Kind || unique[len(unique)-1].Path != term.Path || unique[len(unique)-1].Text != term.Text { unique = append(unique, term) } }
 	candidate.Terms = unique
 }
 
 func recallStructuralRefs(terms []recallTerm) []WorldRecallStructuralRef {
 	refs := make([]WorldRecallStructuralRef, 0, len(terms))
-	for _, term := range terms {
-		ref := WorldRecallStructuralRef{TermKind: term.Kind, TermPath: term.Path}
-		if len(refs) == 0 || refs[len(refs)-1] != ref {
-			refs = append(refs, ref)
-		}
-	}
-	sort.Slice(refs, func(i, j int) bool {
-		if refs[i].TermKind != refs[j].TermKind {
-			return refs[i].TermKind < refs[j].TermKind
-		}
-		return refs[i].TermPath < refs[j].TermPath
-	})
+	for _, term := range terms { refs = append(refs, WorldRecallStructuralRef{TermKind: term.Kind, TermPath: term.Path}) }
+	return mergeRecallRefs(nil, refs)
+}
+
+func mergeRecallRefs(left, right []WorldRecallStructuralRef) []WorldRecallStructuralRef {
+	refs := append(append([]WorldRecallStructuralRef(nil), left...), right...)
+	sort.Slice(refs, func(i, j int) bool { if refs[i].TermKind != refs[j].TermKind { return refs[i].TermKind < refs[j].TermKind }; return refs[i].TermPath < refs[j].TermPath })
 	unique := refs[:0]
-	for _, ref := range refs {
-		if len(unique) == 0 || unique[len(unique)-1] != ref {
-			unique = append(unique, ref)
-		}
-	}
+	for _, ref := range refs { if len(unique) == 0 || unique[len(unique)-1] != ref { unique = append(unique, ref) } }
 	return unique
 }
 
-func normalizeRecallQuery(input string) []string {
-	input = strings.TrimPrefix(input, "@")
-	fields := strings.Fields(strings.ToLower(strings.TrimSpace(input)))
-	seen := map[string]bool{}
-	tokens := make([]string, 0, len(fields))
-	for _, field := range fields {
-		if field != "" && !seen[field] {
-			seen[field] = true
-			tokens = append(tokens, field)
-		}
-	}
-	sort.Strings(tokens)
-	return tokens
-}
+func normalizeRecallQuery(input string) []string { input = strings.TrimPrefix(input, "@"); fields := strings.Fields(strings.ToLower(strings.TrimSpace(input))); seen := map[string]bool{}; tokens := make([]string, 0, len(fields)); for _, field := range fields { if field != "" && !seen[field] { seen[field] = true; tokens = append(tokens, field) } }; sort.Strings(tokens); return tokens }
 
-func recallMatches(tokens []string, terms []recallTerm) ([]WorldRecallMatch, bool) {
-	matches := make([]WorldRecallMatch, 0, len(tokens))
-	for _, token := range tokens {
-		var best WorldRecallMatch
-		found := false
-		for _, term := range terms {
-			match, ok := recallTermMatch(token, term)
-			if !ok {
-				continue
-			}
-			if !found || lessRecallMatch(match, best) {
-				best = match
-				found = true
-			}
-		}
-		if !found {
-			return nil, false
-		}
-		matches = append(matches, best)
-	}
-	return matches, true
-}
+func recallMatches(tokens []string, terms []recallTerm) ([]WorldRecallMatch, bool) { matches := make([]WorldRecallMatch, 0, len(tokens)); for _, token := range tokens { var best WorldRecallMatch; found := false; for _, term := range terms { match, ok := recallTermMatch(token, term); if !ok { continue }; if !found || lessRecallMatch(match, best) { best = match; found = true } }; if !found { return nil, false }; matches = append(matches, best) }; return matches, true }
 
-func recallTermMatch(token string, term recallTerm) (WorldRecallMatch, bool) {
-	text := term.Folded
-	match := WorldRecallMatch{Token: token, TermKind: term.Kind, TermPath: term.Path}
-	switch {
-	case text == token:
-		match.Class = WorldRecallExact
-		match.Positions = runeRange(0, utf8.RuneCountInString(token))
-		return match, true
-	case strings.HasPrefix(text, token):
-		match.Class = WorldRecallPrefix
-		match.Positions = runeRange(0, utf8.RuneCountInString(token))
-		return match, true
-	case strings.Contains(text, token):
-		match.Class = WorldRecallSubstring
-		byteStart := strings.Index(text, token)
-		runeStart := utf8.RuneCountInString(text[:byteStart])
-		match.Positions = runeRange(runeStart, utf8.RuneCountInString(token))
-		return match, true
-	default:
-		found := fuzzy.FindNoSort(token, []string{text})
-		if len(found) != 1 {
-			return WorldRecallMatch{}, false
-		}
-		match.Class = WorldRecallSubsequence
-		match.PrimitiveScore = found[0].Score
-		match.Positions = bytePositionsToRunes(text, found[0].MatchedIndexes)
-		return match, true
-	}
-}
+func recallTermMatch(token string, term recallTerm) (WorldRecallMatch, bool) { text := term.Folded; match := WorldRecallMatch{Token: token, TermKind: term.Kind, TermPath: term.Path}; switch { case text == token: match.Class = WorldRecallExact; match.Positions = runeRange(0, utf8.RuneCountInString(token)); return match, true; case strings.HasPrefix(text, token): match.Class = WorldRecallPrefix; match.Positions = runeRange(0, utf8.RuneCountInString(token)); return match, true; case strings.Contains(text, token): match.Class = WorldRecallSubstring; byteStart := strings.Index(text, token); runeStart := utf8.RuneCountInString(text[:byteStart]); match.Positions = runeRange(runeStart, utf8.RuneCountInString(token)); return match, true; default: found := fuzzy.FindNoSort(token, []string{text}); if len(found) != 1 { return WorldRecallMatch{}, false }; match.Class = WorldRecallSubsequence; match.PrimitiveScore = found[0].Score; match.Positions = bytePositionsToRunes(text, found[0].MatchedIndexes); return match, true } }
 
-func lessRecallMatch(left, right WorldRecallMatch) bool {
-	if recallClassOrder(left.Class) != recallClassOrder(right.Class) {
-		return recallClassOrder(left.Class) < recallClassOrder(right.Class)
-	}
-	if left.Class == WorldRecallSubsequence && left.PrimitiveScore != right.PrimitiveScore {
-		return left.PrimitiveScore > right.PrimitiveScore
-	}
-	if recallTermKindOrder(left.TermKind) != recallTermKindOrder(right.TermKind) {
-		return recallTermKindOrder(left.TermKind) < recallTermKindOrder(right.TermKind)
-	}
-	return left.TermPath < right.TermPath
-}
+func lessRecallMatch(left, right WorldRecallMatch) bool { if recallClassOrder(left.Class) != recallClassOrder(right.Class) { return recallClassOrder(left.Class) < recallClassOrder(right.Class) }; if left.Class == WorldRecallSubsequence && left.PrimitiveScore != right.PrimitiveScore { return left.PrimitiveScore > right.PrimitiveScore }; if recallTermKindOrder(left.TermKind) != recallTermKindOrder(right.TermKind) { return recallTermKindOrder(left.TermKind) < recallTermKindOrder(right.TermKind) }; return left.TermPath < right.TermPath }
 
-func recallRank(candidate recallCandidate, matches []WorldRecallMatch) WorldRecallRank {
-	rank := WorldRecallRank{ScopeCompatibility: 0, CandidateKind: recallCandidateKindOrder(candidate.Kind)}
-	if len(matches) > 0 {
-		rank.WorstClass = -1
-	}
-	for _, match := range matches {
-		class := recallClassOrder(match.Class)
-		if class > rank.WorstClass {
-			rank.WorstClass = class
-		}
-		switch match.Class {
-		case WorldRecallExact:
-			rank.ExactCount++
-		case WorldRecallPrefix:
-			rank.PrefixCount++
-		case WorldRecallSubstring:
-			rank.SubstringCount++
-		case WorldRecallSubsequence:
-			rank.SubsequenceScore += match.PrimitiveScore
-		}
-		if !recallDescriptionKind(match.TermKind) {
-			rank.DirectCount++
-		}
-	}
-	if candidate.Kind == WorldRecallMissingKeyKind && candidate.Required {
-		rank.RequiredPreference = 1
-	}
-	return rank
-}
+func recallRank(candidate recallCandidate, matches []WorldRecallMatch, historyAware bool) WorldRecallRank { rank := WorldRecallRank{ScopeCompatibility: 0, SourcePreference: candidate.SourcePreference, CandidateKind: recallCandidateKindOrder(candidate.Kind), HistoryRecency: candidate.HistoryRecency, HistoryFrequency: candidate.HistoryFrequency, HistoryAware: historyAware}; if len(matches) > 0 { rank.WorstClass = -1 }; for _, match := range matches { class := recallClassOrder(match.Class); if class > rank.WorstClass { rank.WorstClass = class }; switch match.Class { case WorldRecallExact: rank.ExactCount++; case WorldRecallPrefix: rank.PrefixCount++; case WorldRecallSubstring: rank.SubstringCount++; case WorldRecallSubsequence: rank.SubsequenceScore += match.PrimitiveScore }; if !recallDescriptionKind(match.TermKind) { rank.DirectCount++ } }; if candidate.Kind == WorldRecallMissingKeyKind && candidate.Required { rank.RequiredPreference = 1 }; return rank }
 
-func lessRecallResult(left, right WorldRecallResult) bool {
-	a, b := left.Rank, right.Rank
-	if a.ScopeCompatibility != b.ScopeCompatibility {
-		return a.ScopeCompatibility < b.ScopeCompatibility
-	}
-	if a.WorstClass != b.WorstClass {
-		return a.WorstClass < b.WorstClass
-	}
-	if a.ExactCount != b.ExactCount {
-		return a.ExactCount > b.ExactCount
-	}
-	if a.PrefixCount != b.PrefixCount {
-		return a.PrefixCount > b.PrefixCount
-	}
-	if a.SubstringCount != b.SubstringCount {
-		return a.SubstringCount > b.SubstringCount
-	}
-	if a.DirectCount != b.DirectCount {
-		return a.DirectCount > b.DirectCount
-	}
-	if a.SubsequenceScore != b.SubsequenceScore {
-		return a.SubsequenceScore > b.SubsequenceScore
-	}
-	if a.RequiredPreference != b.RequiredPreference {
-		return a.RequiredPreference > b.RequiredPreference
-	}
-	if a.CandidateKind != b.CandidateKind {
-		return a.CandidateKind < b.CandidateKind
-	}
-	return left.CandidateID < right.CandidateID
-}
+func lessRecallResult(left, right WorldRecallResult) bool { a, b := left.Rank, right.Rank; if a.ScopeCompatibility != b.ScopeCompatibility { return a.ScopeCompatibility < b.ScopeCompatibility }; if a.WorstClass != b.WorstClass { return a.WorstClass < b.WorstClass }; if a.ExactCount != b.ExactCount { return a.ExactCount > b.ExactCount }; if a.PrefixCount != b.PrefixCount { return a.PrefixCount > b.PrefixCount }; if a.SubstringCount != b.SubstringCount { return a.SubstringCount > b.SubstringCount }; if a.DirectCount != b.DirectCount { return a.DirectCount > b.DirectCount }; if a.SubsequenceScore != b.SubsequenceScore { return a.SubsequenceScore > b.SubsequenceScore }; if a.RequiredPreference != b.RequiredPreference { return a.RequiredPreference > b.RequiredPreference }; if a.HistoryAware && b.HistoryAware && a.SourcePreference != b.SourcePreference { return a.SourcePreference < b.SourcePreference }; if a.CandidateKind != b.CandidateKind { return a.CandidateKind < b.CandidateKind }; if a.HistoryAware && b.HistoryAware && a.HistoryRecency != b.HistoryRecency { return a.HistoryRecency > b.HistoryRecency }; if a.HistoryAware && b.HistoryAware && a.HistoryFrequency != b.HistoryFrequency { return a.HistoryFrequency > b.HistoryFrequency }; return left.CandidateID < right.CandidateID }
 
-func recallDocumentation(candidate recallCandidate, matches []WorldRecallMatch) string {
-	parts := []string{}
-	if candidate.Description != "" {
-		parts = append(parts, candidate.Description)
-	}
-	parts = append(parts, "Preview:\n"+candidate.Materialization)
-	if len(matches) > 0 {
-		reasons := make([]string, 0, len(matches))
-		for _, match := range matches {
-			reasons = append(reasons, fmt.Sprintf("%s: %s via %s (%s)", match.Token, match.Class, match.TermKind, match.TermPath))
-		}
-		parts = append(parts, "Matches:\n"+strings.Join(reasons, "\n"))
-	}
-	return strings.Join(parts, "\n\n")
-}
+func recallDocumentation(candidate recallCandidate, matches []WorldRecallMatch) string { parts := []string{}; if candidate.Description != "" { parts = append(parts, candidate.Description) }; parts = append(parts, "Preview:\n"+candidate.Materialization); if len(matches) > 0 { reasons := make([]string, 0, len(matches)); for _, match := range matches { reasons = append(reasons, fmt.Sprintf("%s: %s via %s (%s)", match.Token, match.Class, match.TermKind, match.TermPath)) }; parts = append(parts, "Matches:\n"+strings.Join(reasons, "\n")) }; document := strings.Join(parts, "\n\n"); if len(document) > MaxHistoryDocumentationBytes && candidate.SourcePreference > 0 { document = document[:MaxHistoryDocumentationBytes]; for !utf8.ValidString(document) { document = document[:len(document)-1] } }; return document }
 
-func recallCommandTerms(command CommandDefinition) []recallTerm {
-	path := recallTypedPath("command", command.Name)
-	terms := []recallTerm{{Kind: "command.name", Path: path + ".name", Text: command.Name}}
-	for _, value := range command.Aliases {
-		terms = append(terms, recallTerm{Kind: "command.alias", Path: path + "." + recallTypedPath("alias", value), Text: value})
-	}
-	for _, value := range command.Keywords {
-		terms = append(terms, recallTerm{Kind: "command.keyword", Path: path + "." + recallTypedPath("keyword", value), Text: value})
-	}
-	if command.Description != "" {
-		terms = append(terms, recallTerm{Kind: "command.description", Path: path + ".description", Text: command.Description})
-	}
-	return terms
-}
-
-func recallFieldTerms(commandName string, field CommandField) []recallTerm {
-	path := recallFieldPath(commandName, field.Name)
-	terms := []recallTerm{{Kind: "field.name", Path: path + ".name", Text: field.Name}}
-	if field.Description != "" {
-		terms = append(terms, recallTerm{Kind: "field.description", Path: path + ".description", Text: field.Description})
-	}
-	for _, value := range recallFieldValueTerms(field) {
-		terms = append(terms, recallTerm{Kind: value.Kind, Path: path + "." + value.Path, Text: value.Text})
-	}
-	return terms
-}
-
-func recallPresetTerms(command CommandDefinition, preset CommandPreset) []recallTerm {
-	base := recallTypedPath("command", command.Name) + "." + recallTypedPath("preset", preset.ID)
-	terms := []recallTerm{{Kind: "preset.label", Path: base + ".label", Text: preset.Label}}
-	for _, field := range command.Fields {
-		value, ok := preset.Values[field.Name]
-		if !ok && field.Default != nil {
-			value, ok = *field.Default, true
-		}
-		if ok {
-			terms = append(terms, recallTerm{Kind: "preset.value", Path: base + "." + recallTypedPath("value", field.Name), Text: value.Text()})
-		}
-	}
-	return terms
-}
-
+func recallCommandTerms(command CommandDefinition) []recallTerm { path := recallTypedPath("command", command.Name); terms := []recallTerm{{Kind: "command.name", Path: path + ".name", Text: command.Name}}; for _, value := range command.Aliases { terms = append(terms, recallTerm{Kind: "command.alias", Path: path + "." + recallTypedPath("alias", value), Text: value}) }; for _, value := range command.Keywords { terms = append(terms, recallTerm{Kind: "command.keyword", Path: path + "." + recallTypedPath("keyword", value), Text: value}) }; if command.Description != "" { terms = append(terms, recallTerm{Kind: "command.description", Path: path + ".description", Text: command.Description}) }; return terms }
+func recallFieldTerms(commandName string, field CommandField) []recallTerm { path := recallFieldPath(commandName, field.Name); terms := []recallTerm{{Kind: "field.name", Path: path + ".name", Text: field.Name}}; if field.Description != "" { terms = append(terms, recallTerm{Kind: "field.description", Path: path + ".description", Text: field.Description}) }; for _, value := range recallFieldValueTerms(field) { terms = append(terms, recallTerm{Kind: value.Kind, Path: path + "." + value.Path, Text: value.Text}) }; return terms }
+func recallPresetTerms(command CommandDefinition, preset CommandPreset) []recallTerm { base := recallTypedPath("command", command.Name) + "." + recallTypedPath("preset", preset.ID); terms := []recallTerm{{Kind: "preset.label", Path: base + ".label", Text: preset.Label}}; for _, field := range command.Fields { value, ok := preset.Values[field.Name]; if !ok && field.Default != nil { value, ok = *field.Default, true }; if ok { terms = append(terms, recallTerm{Kind: "preset.value", Path: base + "." + recallTypedPath("value", field.Name), Text: value.Text()}) } }; return terms }
 type recallFieldValueTerm struct{ Kind, Path, Text string }
-
-type recallFieldValue struct {
-	Text    string
-	Sources []recallFieldValueTerm
-}
-
-func recallFieldValueTerms(field CommandField) []recallFieldValueTerm {
-	values := []recallFieldValueTerm{}
-	for _, value := range field.Enum {
-		values = append(values, recallFieldValueTerm{"field.enum", recallTypedPath("enum", value), value})
-	}
-	if field.Default != nil {
-		values = append(values, recallFieldValueTerm{"field.default", "default", field.Default.Text()})
-	}
-	for _, value := range field.Examples {
-		values = append(values, recallFieldValueTerm{"field.example", recallTypedPath("example", value), value})
-	}
-	for _, value := range field.MaterializedValues {
-		values = append(values, recallFieldValueTerm{"field.materialized", recallTypedPath("materialized", value.Text()), value.Text()})
-	}
-	return values
-}
-
-func recallFieldValues(field CommandField) []recallFieldValue {
-	groups := []recallFieldValue{}
-	byText := map[string]int{}
-	for _, source := range recallFieldValueTerms(field) {
-		position, exists := byText[source.Text]
-		if !exists {
-			position = len(groups)
-			byText[source.Text] = position
-			groups = append(groups, recallFieldValue{Text: source.Text})
-		}
-		groups[position].Sources = append(groups[position].Sources, source)
-	}
-	return groups
-}
-
-func recallFieldValueSourceDetail(sources []recallFieldValueTerm) string {
-	kinds := make([]string, 0, len(sources))
-	seen := map[string]bool{}
-	for _, source := range sources {
-		if !seen[source.Kind] {
-			seen[source.Kind] = true
-			kinds = append(kinds, source.Kind)
-		}
-	}
-	return strings.Join(kinds, " > ")
-}
-
-func renderSchemaTemplate(command CommandDefinition) string {
-	lines := []string{"@" + command.Name}
-	for _, field := range command.Fields {
-		if !field.Required {
-			continue
-		}
-		value := ""
-		if field.Default != nil {
-			value = quoteCommandMaterial(field.Default.Text())
-		}
-		lines = append(lines, field.Name+"="+value)
-	}
-	return strings.Join(lines, "\n")
-}
-
-func renderPreset(command CommandDefinition, preset CommandPreset) string {
-	lines := []string{"@" + command.Name}
-	for _, field := range command.Fields {
-		value, ok := preset.Values[field.Name]
-		if !ok && field.Required && field.Default != nil {
-			value, ok = *field.Default, true
-		}
-		if ok {
-			lines = append(lines, field.Name+"="+quoteCommandMaterial(value.Text()))
-		}
-	}
-	return strings.Join(lines, "\n")
-}
-
-func quoteCommandMaterial(value string) string {
-	if strings.ContainsAny(value, " \t") {
-		return `"` + value + `"`
-	}
-	return value
-}
-
-func recallFieldPath(command, field string) string {
-	return recallTypedPath("command", command) + "." + recallTypedPath("field", field)
-}
-
-func recallTypedPath(kind, component string) string {
-	return kind + "[" + canonicalRecallComponent(component) + "]"
-}
-
-func canonicalRecallComponent(component string) string {
-	encoded, _ := json.Marshal(component)
-	return string(encoded)
-}
-
-func runeRange(start, length int) []int {
-	out := make([]int, length)
-	for i := range out {
-		out[i] = start + i
-	}
-	return out
-}
-
-func bytePositionsToRunes(text string, positions []int) []int {
-	out := make([]int, len(positions))
-	for i, position := range positions {
-		out[i] = utf8.RuneCountInString(text[:position])
-	}
-	return out
-}
-
-func recallClassOrder(class WorldRecallMatchClass) int {
-	switch class {
-	case WorldRecallExact:
-		return 0
-	case WorldRecallPrefix:
-		return 1
-	case WorldRecallSubstring:
-		return 2
-	default:
-		return 3
-	}
-}
-
-func recallCandidateKindOrder(kind WorldRecallKind) int {
-	switch kind {
-	case WorldRecallSchemaTemplate:
-		return 0
-	case WorldRecallObjectPreset:
-		return 1
-	case WorldRecallMissingKeyKind:
-		return 2
-	default:
-		return 3
-	}
-}
-
-func recallDescriptionKind(kind string) bool {
-	return kind == "command.description" || kind == "field.description"
-}
-
-func recallTermKindOrder(kind string) int {
-	order := map[string]int{"command.name": 0, "command.alias": 1, "command.keyword": 2, "field.name": 3, "field.enum": 4, "field.default": 5, "field.example": 6, "field.materialized": 7, "preset.label": 8, "preset.value": 9, "command.description": 10, "field.description": 11}
-	if value, ok := order[kind]; ok {
-		return value
-	}
-	return len(order)
-}
+type recallFieldValue struct { Text string; Sources []recallFieldValueTerm }
+func recallFieldValueTerms(field CommandField) []recallFieldValueTerm { values := []recallFieldValueTerm{}; for _, value := range field.Enum { values = append(values, recallFieldValueTerm{"field.enum", recallTypedPath("enum", value), value}) }; if field.Default != nil { values = append(values, recallFieldValueTerm{"field.default", "default", field.Default.Text()}) }; for _, value := range field.Examples { values = append(values, recallFieldValueTerm{"field.example", recallTypedPath("example", value), value}) }; for _, value := range field.MaterializedValues { values = append(values, recallFieldValueTerm{"field.materialized", recallTypedPath("materialized", value.Text()), value.Text()}) }; return values }
+func recallFieldValues(field CommandField) []recallFieldValue { groups := []recallFieldValue{}; byText := map[string]int{}; for _, source := range recallFieldValueTerms(field) { position, exists := byText[source.Text]; if !exists { position = len(groups); byText[source.Text] = position; groups = append(groups, recallFieldValue{Text: source.Text}) }; groups[position].Sources = append(groups[position].Sources, source) }; return groups }
+func recallFieldValueSourceDetail(sources []recallFieldValueTerm) string { kinds := make([]string, 0, len(sources)); seen := map[string]bool{}; for _, source := range sources { if !seen[source.Kind] { seen[source.Kind] = true; kinds = append(kinds, source.Kind) } }; return strings.Join(kinds, " > ") }
+func renderSchemaTemplate(command CommandDefinition) string { lines := []string{"@" + command.Name}; for _, field := range command.Fields { if !field.Required { continue }; value := ""; if field.Default != nil { value = quoteCommandMaterial(field.Default.Text()) }; lines = append(lines, field.Name+"="+value) }; return strings.Join(lines, "\n") }
+func renderPreset(command CommandDefinition, preset CommandPreset) string { lines := []string{"@" + command.Name}; for _, field := range command.Fields { value, ok := preset.Values[field.Name]; if !ok && field.Required && field.Default != nil { value, ok = *field.Default, true }; if ok { lines = append(lines, field.Name+"="+quoteCommandMaterial(value.Text())) } }; return strings.Join(lines, "\n") }
+func quoteCommandMaterial(value string) string { if strings.ContainsAny(value, " \t") { return `"` + value + `"` }; return value }
+func recallFieldPath(command, field string) string { return recallTypedPath("command", command) + "." + recallTypedPath("field", field) }
+func recallTypedPath(kind, component string) string { return kind + "[" + canonicalRecallComponent(component) + "]" }
+func canonicalRecallComponent(component string) string { encoded, _ := json.Marshal(component); return string(encoded) }
+func runeRange(start, length int) []int { out := make([]int, length); for i := range out { out[i] = start + i }; return out }
+func bytePositionsToRunes(text string, positions []int) []int { out := make([]int, len(positions)); for i, position := range positions { out[i] = utf8.RuneCountInString(text[:position]) }; return out }
+func recallClassOrder(class WorldRecallMatchClass) int { switch class { case WorldRecallExact: return 0; case WorldRecallPrefix: return 1; case WorldRecallSubstring: return 2; default: return 3 } }
+func recallCandidateKindOrder(kind WorldRecallKind) int { switch kind { case WorldRecallSchemaTemplate: return 0; case WorldRecallObjectPreset: return 1; case WorldRecallMissingKeyKind: return 2; default: return 3 } }
+func recallDescriptionKind(kind string) bool { return kind == "command.description" || kind == "field.description" }
+func recallTermKindOrder(kind string) int { order := map[string]int{"command.name": 0, "command.alias": 1, "command.keyword": 2, "field.name": 3, "field.enum": 4, "field.default": 5, "field.example": 6, "field.materialized": 7, "preset.label": 8, "preset.value": 9, "history.search": 10, "history.field_value": 11, "command.description": 12, "field.description": 13}; if value, ok := order[kind]; ok { return value }; return len(order) }
