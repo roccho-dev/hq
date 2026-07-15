@@ -57,7 +57,7 @@ func TestWorkspaceApprovalConflictFailsClosed(t *testing.T) {
 func TestIdenticalWorkspaceApprovalIsIdempotentAcross32ConcurrentWriters(t *testing.T) {
 	root := t.TempDir()
 	record := testApprovalRecord()
-	results := runConcurrentApprovalAppends(t, 32, func(int) ApprovalRecord { return record })
+	results := runConcurrentApprovalAppendsAt(t, root, 32, func(int) ApprovalRecord { return record })
 	appended := 0
 	for _, result := range results {
 		if result.err != nil {
@@ -76,7 +76,7 @@ func TestIdenticalWorkspaceApprovalIsIdempotentAcross32ConcurrentWriters(t *test
 func TestDistinctWorkspaceApprovalsConflictAcross32ConcurrentWriters(t *testing.T) {
 	root := t.TempDir()
 	record := testApprovalRecord()
-	results := runConcurrentApprovalAppends(t, 32, func(index int) ApprovalRecord {
+	results := runConcurrentApprovalAppendsAt(t, root, 32, func(index int) ApprovalRecord {
 		candidate := record
 		candidate.ApprovedBy = fmt.Sprintf("owner-%02d@example", index)
 		return candidate
@@ -115,12 +115,6 @@ func TestMergeApprovalStoresRejectsConflictingAuthority(t *testing.T) {
 type approvalAppendResult struct {
 	appended bool
 	err      error
-}
-
-func runConcurrentApprovalAppends(t *testing.T, count int, record func(int) ApprovalRecord) []approvalAppendResult {
-	t.Helper()
-	root := t.TempDir()
-	return runConcurrentApprovalAppendsAt(t, root, count, record)
 }
 
 func runConcurrentApprovalAppendsAt(t *testing.T, root string, count int, record func(int) ApprovalRecord) []approvalAppendResult {
