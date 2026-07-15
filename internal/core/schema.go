@@ -92,24 +92,39 @@ type CommandDefinition struct {
 	CommandID      string         `json:"command_id,omitempty"`
 	CommandVersion string         `json:"command_version,omitempty"`
 	Name           string         `json:"name"`
-	Aliases        []string        `json:"aliases,omitempty"`
-	Keywords       []string        `json:"keywords,omitempty"`
-	Description    string          `json:"description,omitempty"`
-	Instruction    map[string]any  `json:"instruction"`
-	Fields         []CommandField  `json:"fields,omitempty"`
+	Aliases        []string       `json:"aliases,omitempty"`
+	Keywords       []string       `json:"keywords,omitempty"`
+	Description    string         `json:"description,omitempty"`
+	Instruction    map[string]any `json:"instruction"`
+	Fields         []CommandField `json:"fields,omitempty"`
 	Presets        []CommandPreset `json:"presets,omitempty"`
 }
 
-// LocalToolDefinition is a finite, data-only description of one exact local
-// tool contract. BindingRef identifies an installed provider; executable
-// paths and provider discovery are deliberately absent from the world model.
+// LocalToolDefinition is a data-only description of one exact local resource.
+// BindingRef identifies an installed provider; executable paths and provider
+// discovery are deliberately absent from the world model. Actions are promoted
+// typed operations. Invocation is the separately bounded resource-level argv
+// policy and does not create per-subcommand world actions.
 type LocalToolDefinition struct {
-	Kind                   string            `json:"kind"`
-	ToolID                 string            `json:"tool_id"`
-	ToolVersion            string            `json:"tool_version"`
-	BindingRef             string            `json:"binding_ref"`
-	BindingContractVersion string            `json:"binding_contract_version"`
-	Actions                []LocalToolAction `json:"actions"`
+	Kind                   string               `json:"kind"`
+	ToolID                 string               `json:"tool_id"`
+	ToolVersion            string               `json:"tool_version"`
+	BindingRef             string               `json:"binding_ref"`
+	BindingContractVersion string               `json:"binding_contract_version"`
+	Invocation             *LocalToolInvocation `json:"invocation,omitempty"`
+	Actions                []LocalToolAction    `json:"actions,omitempty"`
+}
+
+// LocalToolInvocation is a selected resource contract, not a command wrapper.
+// PolicyVersion is carried in each accepted invocation so exact instruction
+// approval cannot silently survive a policy change.
+type LocalToolInvocation struct {
+	PolicyVersion          string          `json:"policy_version"`
+	DeniedOptions          []string        `json:"denied_options,omitempty"`
+	DeniedArgumentPrefixes []string        `json:"denied_argument_prefixes,omitempty"`
+	MaxArgv                int             `json:"max_argv"`
+	MaxArgBytes            int             `json:"max_arg_bytes"`
+	Limits                 LocalToolLimits `json:"limits"`
 }
 
 type LocalToolAction struct {

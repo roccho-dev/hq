@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"hq/internal/core"
+	"hq/internal/localtoolpolicy"
 	"hq/internal/worker/adapter"
 	"hq/internal/worker/directexec"
 )
@@ -23,10 +24,12 @@ type Preparer struct {
 }
 
 type payload struct {
-	ToolID      string                     `json:"tool_id"`
-	ToolVersion string                     `json:"tool_version"`
-	ActionID    string                     `json:"action_id"`
-	Input       map[string]json.RawMessage `json:"input"`
+	ToolID        string                     `json:"tool_id"`
+	ToolVersion   string                     `json:"tool_version"`
+	ActionID      string                     `json:"action_id,omitempty"`
+	Input         map[string]json.RawMessage `json:"input,omitempty"`
+	PolicyVersion string                     `json:"policy_version,omitempty"`
+	Argv          []string                   `json:"argv,omitempty"`
 }
 
 func (p Preparer) Prepare(_ context.Context, request adapter.Request) (adapter.Prepared, error) {
@@ -40,6 +43,11 @@ func (p Preparer) Prepare(_ context.Context, request adapter.Request) (adapter.P
 	if err := decodeStrict(request.Payload, &value); err != nil {
 		return adapter.Prepared{}, blocked("local_tool_payload_invalid", err.Error())
 	}
+	finite := value.ActionID != "" || value.Input != nil
+	invocation := value.PolicyVersion != "" || value.Argv != nil
+	if finite == invocation {
+		return adapter.Prepared{}, blocked("local_tool_payload_invalid", "payload must be exactly one finite action or one verified-resource invocation")
+	}
 	if p.World == nil {
 		return adapter.Prepared{}, blocked("local_tool_world_unavailable", "selected world is unavailable")
 	}
@@ -47,20 +55,49 @@ func (p Preparer) Prepare(_ context.Context, request adapter.Request) (adapter.P
 	if !ok {
 		return adapter.Prepared{}, blocked("local_tool_unknown", fmt.Sprintf("local tool %q version %q is unavailable", value.ToolID, value.ToolVersion))
 	}
-	action, ok := actionByID(tool, value.ActionID)
-	if !ok {
-		return adapter.Prepared{}, blocked("local_tool_action_unknown", fmt.Sprintf("local tool action %q is unavailable", value.ActionID))
+
+	var action core.LocalToolAction
+	var plan executionPlan
+	var capabilityID string
+	if finite {
+		if value.ActionID == "" || value.Input == nil {
+			return adapter.Prepared{}, blocked("local_tool_payload_invalid", "finite action requires action_id and input")
+		}
+		action, ok = actionByID(tool, value.ActionID)
+		if !ok {
+			return adapter.Prepared{}, blocked("local_tool_action_unknown", fmt.Sprintf("local tool action %q is unavailable", value.ActionID))
+		}
+		var err error
+		plan, err = buildPlan(action, value.Input)
+		if err != nil {
+			return adapter.Prepared{}, err
+		}
+		capabilityID = fmt.Sprintf("local-tool:%s@%s/%s", tool.ToolID, tool.ToolVersion, action.ActionID)
+	} else {
+		if tool.Invocation == nil {
+			return adapter.Prepared{}, blocked("resource_invocation_unavailable", fmt.Sprintf("local tool %q version %q does not permit resource invocation", value.ToolID, value.ToolVersion))
+		}
+		if err := localtoolpolicy.ValidateDefinition(*tool.Invocation); err != nil {
+			return adapter.Prepared{}, blocked("resource_invocation_policy_invalid", err.Error())
+		}
+		if err := localtoolpolicy.ValidateInvocation(*tool.Invocation, value.PolicyVersion, value.Argv); err != nil {
+			var failure *localtoolpolicy.Failure
+			if errors.As(err, &failure) {
+				return adapter.Prepared{}, blocked(failure.Code, failure.Message)
+			}
+			return adapter.Prepared{}, blocked("resource_invocation_policy_invalid", err.Error())
+		}
+		action = invocationAction(*tool.Invocation)
+		plan = executionPlan{args: append([]string(nil), value.Argv...)}
+		capabilityID = fmt.Sprintf("local-tool:%s@%s/invoke@%s", tool.ToolID, tool.ToolVersion, tool.Invocation.PolicyVersion)
 	}
-	plan, err := buildPlan(action, value.Input)
-	if err != nil {
-		return adapter.Prepared{}, err
-	}
+
 	binding, err := LoadVerifiedBinding(p.BindingsPath, tool.BindingRef, tool.BindingContractVersion)
 	if err != nil {
 		return adapter.Prepared{}, err
 	}
 	descriptor := adapter.ProviderDescriptor{
-		CapabilityID:    fmt.Sprintf("local-tool:%s@%s/%s", tool.ToolID, tool.ToolVersion, action.ActionID),
+		CapabilityID:    capabilityID,
 		ProviderID:      binding.BindingRef,
 		ContractVersion: binding.ContractVersion,
 		DeploymentID:    binding.DeploymentID,
@@ -71,6 +108,18 @@ func (p Preparer) Prepare(_ context.Context, request adapter.Request) (adapter.P
 		return adapter.Prepared{}, blocked("local_tool_provider_invalid", err.Error())
 	}
 	return adapter.Prepared{Adapter: &preparedAdapter{binding: binding, action: action, plan: plan}, Provider: &descriptor}, nil
+}
+
+func invocationAction(invocation core.LocalToolInvocation) core.LocalToolAction {
+	return core.LocalToolAction{
+		ActionID:  "resource.invoke",
+		Stdin:     core.LocalToolStdin{Mode: "none"},
+		Limits:    invocation.Limits,
+		Output:    core.LocalToolOutput{Format: "text"},
+		Lifecycle: "one-shot",
+		Risk:      "high",
+		Approval:  "explicit",
+	}
 }
 
 type executionPlan struct {

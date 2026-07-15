@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hq/internal/worker/adapter"
@@ -99,8 +100,11 @@ func (r Runner) Process(ctx context.Context, rows []ReadRow, prior LogData, repl
 			decision.ApprovedBy = ""
 			policyMessage = base.Message
 		}
-		if err := appendEntry(PolicyEntry(decision)); err != nil {
-			return emitted, unsuccessful, err
+		held := !recovering && !decision.MayDispatch && decision.Status == workersafety.PolicyApprovalRequired && isVerifiedResourceInvocation(row.Instruction)
+		if !held || !matchingPolicyRecorded(prior.Policies, decision) {
+			if err := appendEntry(PolicyEntry(decision)); err != nil {
+				return emitted, unsuccessful, err
+			}
 		}
 		if newRun {
 			accepted := ResultRow{EventID: makeEventID(runID, seq), Version: ResultVersionV1, RunID: runID, InstructionID: row.Instruction.ID, Target: row.Instruction.Target, Kind: ResultAccepted, Seq: seq, RecordedAt: clock()}
@@ -115,6 +119,9 @@ func (r Runner) Process(ctx context.Context, rows []ReadRow, prior LogData, repl
 				return emitted, unsuccessful, err
 			}
 			unsuccessful++
+			continue
+		}
+		if held {
 			continue
 		}
 		if !decision.MayDispatch {
@@ -207,6 +214,33 @@ func (r Runner) Process(ctx context.Context, rows []ReadRow, prior LogData, repl
 	}
 	return emitted, unsuccessful, nil
 }
+
+func isVerifiedResourceInvocation(instruction Instruction) bool {
+	if instruction.Target != "local-tool" {
+		return false
+	}
+	var payload struct {
+		ActionID      *string  `json:"action_id"`
+		PolicyVersion *string  `json:"policy_version"`
+		Argv          []string `json:"argv"`
+	}
+	if json.Unmarshal(instruction.Payload, &payload) != nil {
+		return false
+	}
+	return payload.ActionID == nil && payload.PolicyVersion != nil && payload.Argv != nil
+}
+
+func matchingPolicyRecorded(policies []workersafety.PolicyDecision, decision workersafety.PolicyDecision) bool {
+	for index := len(policies) - 1; index >= 0; index-- {
+		prior := policies[index]
+		if prior.InstructionID != decision.InstructionID || prior.RunID != decision.RunID {
+			continue
+		}
+		return prior.InstructionDigest == decision.InstructionDigest && prior.Status == decision.Status && prior.Reason == decision.Reason && prior.MayDispatch == decision.MayDispatch
+	}
+	return false
+}
+
 func providerEvidence(d adapter.ProviderDescriptor, key string) *ProviderEvidence {
 	return &ProviderEvidence{CapabilityID: d.CapabilityID, ProviderID: d.ProviderID, ContractVersion: d.ContractVersion, DeploymentID: d.DeploymentID, ProviderKind: d.ProviderKind, IntegrityDigest: d.IntegrityDigest, IdempotencyContract: d.IdempotencyContract, IdempotencyKey: key}
 }

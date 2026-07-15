@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"hq/internal/core"
+	"hq/internal/localtoolpolicy"
 )
 
 // DefaultSchemaJSONL is current proof-era adapter data. It is not core logic.
@@ -236,8 +237,16 @@ func validateLocalTool(tool core.LocalToolDefinition) error {
 			return fmt.Errorf("%s is invalid", field)
 		}
 	}
-	if len(tool.Actions) == 0 {
-		return errors.New("local tool requires at least one action")
+	if len(tool.Actions) == 0 && tool.Invocation == nil {
+		return errors.New("local tool requires at least one action or invocation policy")
+	}
+	if tool.Invocation != nil {
+		if err := localtoolpolicy.ValidateDefinition(*tool.Invocation); err != nil {
+			return fmt.Errorf("invocation: %w", err)
+		}
+		if err := validateLocalToolLimits(tool.Invocation.Limits); err != nil {
+			return fmt.Errorf("invocation: %w", err)
+		}
 	}
 	seenActions := map[string]bool{}
 	for i, action := range tool.Actions {
@@ -313,14 +322,8 @@ func validateLocalToolAction(action core.LocalToolAction) error {
 	if err := validateLocalToolStdin(action.Stdin, seenInputs); err != nil {
 		return err
 	}
-	if action.Limits.TimeoutMS <= 0 || action.Limits.TimeoutMS > maxLocalToolTimeoutMS {
-		return fmt.Errorf("limits.timeout_ms must be between 1 and %d", maxLocalToolTimeoutMS)
-	}
-	if action.Limits.StdoutBytes <= 0 || action.Limits.StdoutBytes > maxLocalToolOutputBytes {
-		return fmt.Errorf("limits.stdout_bytes must be between 1 and %d", maxLocalToolOutputBytes)
-	}
-	if action.Limits.StderrBytes <= 0 || action.Limits.StderrBytes > maxLocalToolOutputBytes {
-		return fmt.Errorf("limits.stderr_bytes must be between 1 and %d", maxLocalToolOutputBytes)
+	if err := validateLocalToolLimits(action.Limits); err != nil {
+		return err
 	}
 	switch action.Output.Format {
 	case "text", "json", "jsonl":
@@ -349,6 +352,19 @@ func validateLocalToolAction(action core.LocalToolAction) error {
 	case "explicit":
 	default:
 		return fmt.Errorf("unsupported approval %q; canonical explicit approval is required", action.Approval)
+	}
+	return nil
+}
+
+func validateLocalToolLimits(limits core.LocalToolLimits) error {
+	if limits.TimeoutMS <= 0 || limits.TimeoutMS > maxLocalToolTimeoutMS {
+		return fmt.Errorf("limits.timeout_ms must be between 1 and %d", maxLocalToolTimeoutMS)
+	}
+	if limits.StdoutBytes <= 0 || limits.StdoutBytes > maxLocalToolOutputBytes {
+		return fmt.Errorf("limits.stdout_bytes must be between 1 and %d", maxLocalToolOutputBytes)
+	}
+	if limits.StderrBytes <= 0 || limits.StderrBytes > maxLocalToolOutputBytes {
+		return fmt.Errorf("limits.stderr_bytes must be between 1 and %d", maxLocalToolOutputBytes)
 	}
 	return nil
 }
@@ -421,6 +437,10 @@ func sortWorld(world *core.JsonlWorld) {
 			sort.Slice(world.LocalTools[i].Actions[a].Inputs, func(x, y int) bool {
 				return world.LocalTools[i].Actions[a].Inputs[x].Name < world.LocalTools[i].Actions[a].Inputs[y].Name
 			})
+		}
+		if world.LocalTools[i].Invocation != nil {
+			sort.Strings(world.LocalTools[i].Invocation.DeniedOptions)
+			sort.Strings(world.LocalTools[i].Invocation.DeniedArgumentPrefixes)
 		}
 	}
 	sort.Slice(world.LocalTools, func(i, j int) bool {
