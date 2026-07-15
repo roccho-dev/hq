@@ -58,7 +58,7 @@ Finite actions retain the existing one-step product path: explicit `hq.submit` s
 hq approve --profile <name> --instruction <id> --approved-by <identity>
 ```
 
-The command appends one idempotent `worker.approval.v1` row beneath `<workspace>/.hq/approvals.jsonl`. The managed worker rereads that append-only ledger on each poll. An identical repeat is a no-op; conflicting reuse of an instruction ID fails closed. The approval does not create another queue or mutate the accepted instruction.
+The command adds one idempotent `worker.approval.v1` row beneath `<workspace>/.hq/approvals.jsonl`. A short-lived workspace-local OS file lock serializes read-check-write across concurrent `hq approve` processes. The complete previous ledger plus at most one new row is published by atomic replacement, so worker polls observe either the old complete ledger or the new complete ledger, never a duplicate or partial row introduced by this writer. An identical concurrent approval is a no-op; conflicting reuse of an instruction ID fails closed. The lock is coordination only, not a second approval authority. The approval does not create another queue or mutate the accepted instruction.
 
 Malformed payloads and stale approvals are immediately non-green. Resource-policy rejection, missing resource, binding mismatch, and executable tamper are checked after exact approval but before process effect; they produce terminal non-green evidence and zero process start. No denied invocation can reach `started` through a successful provider preparation.
 
@@ -101,7 +101,7 @@ The implementation PR must prove deterministically:
 1. one resource definition prepares at least three distinct AWS-shaped argv vectors with zero actions;
 2. literal shell punctuation remains one argument;
 3. denied exact/equals/abbreviated profile and endpoint options, response-file and file indirection, secret-shaped values, limits, policy drift, stale approval, unknown resource, stale binding, and executable tamper start zero process;
-4. the managed worker leaves missing approval durably held, `hq approve` appends one exact record, and later exact approval resumes the same run exactly once;
+4. the managed worker leaves missing approval durably held, 32 concurrent identical `hq approve` calls publish one readable row, conflicting concurrent approvals publish one winner and remain readable, and later exact approval resumes the same run exactly once;
 5. existing finite-action behavior remains green.
 
 Closing adrs#222 additionally requires a physical restricted-AWS proof and final exact readback. This repository PR does not manufacture cloud evidence.
