@@ -54,6 +54,10 @@ func CompleteWithWorldRecall(buffer string, cursor, documentVersion int, world *
 	if _, selected := world.SelectedRef(); !selected {
 		return nil
 	}
+	if buffer == "" && cursor == 0 {
+		results := recall.Recall(core.WorldRecallQuery{Scope: core.WorldRecallObjectQuery, RecentOnly: true})
+		return recallSuggestions(recall, results, 0, 0, "", documentVersion)
+	}
 	return complete(buffer, cursor, documentVersion, world, recall)
 }
 
