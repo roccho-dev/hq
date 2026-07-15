@@ -83,7 +83,7 @@ func CompileSelectedCommandObjectWithRange(text string, cursorLine int, world *J
 		RecallComplete:     len(acceptedFields) == len(object.Values),
 		RenderContract:     core.CommandObjectMaterializerVersion,
 	}
-	if err := draft.AcceptedInput.ApplyMaterializationLimit(); err != nil {
+	if err := draft.AcceptedInput.ApplyAcceptedInputLimits(definition.Name); err != nil {
 		return CompileDraft{}, CommandObjectRange{}, err
 	}
 	return draft, objectRange, nil
