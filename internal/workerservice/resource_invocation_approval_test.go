@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -125,17 +126,59 @@ func TestManagedWorkerHoldsResourceInvocationUntilExplicitApproval(t *testing.T)
 		cancel()
 		t.Fatal(err)
 	}
-	if _, err := worker.AppendWorkspaceApproval(workspace, worker.ApprovalRecord{
+	approval := worker.ApprovalRecord{
 		Version: worker.ApprovalVersionV1, InstructionID: rows[0].Instruction.ID, Approved: true,
 		ApprovedBy: "owner@test", InstructionDigest: instructionDigest,
-	}); err != nil {
+	}
+	type appendResult struct {
+		appended bool
+		err      error
+	}
+	const concurrentApprovals = 32
+	start := make(chan struct{})
+	results := make(chan appendResult, concurrentApprovals)
+	var ready sync.WaitGroup
+	ready.Add(concurrentApprovals)
+	for index := 0; index < concurrentApprovals; index++ {
+		go func() {
+			ready.Done()
+			<-start
+			appended, err := worker.AppendWorkspaceApproval(workspace, approval)
+			results <- appendResult{appended: appended, err: err}
+		}()
+	}
+	ready.Wait()
+	close(start)
+	appended := 0
+	for index := 0; index < concurrentApprovals; index++ {
+		result := <-results
+		if result.err != nil {
+			cancel()
+			t.Fatalf("concurrent approval failed: %v", result.err)
+		}
+		if result.appended {
+			appended++
+		}
+	}
+	if appended != 1 {
 		cancel()
-		t.Fatal(err)
+		t.Fatalf("concurrent approval appended=%d want=1", appended)
+	}
+	approvalStore, err := worker.LoadWorkspaceApprovals(workspace)
+	if err != nil || approvalStore.ApprovalFor(rows[0].Instruction.ID) == nil {
+		cancel()
+		t.Fatalf("approval ledger unreadable after concurrent append: store=%+v err=%v", approvalStore, err)
 	}
 
 	var completed worker.LogData
 	deadline = time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
+		select {
+		case serveErr := <-done:
+			cancel()
+			t.Fatalf("managed worker stopped while polling concurrent approval ledger: %v", serveErr)
+		default:
+		}
 		ledger, loadErr := worker.LoadEventFile(profile.EventsPath)
 		if loadErr == nil && len(ledger.Results) >= 3 && ledger.Results[len(ledger.Results)-1].Kind == worker.ResultCompleted {
 			completed = ledger
