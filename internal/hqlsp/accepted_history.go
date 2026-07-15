@@ -159,6 +159,9 @@ func decodeAcceptedHistoryLine(raw []byte) (acceptedHistoryScannedRow, error) {
 	if err := instructionDecoder.Decode(&instruction); err != nil {
 		return acceptedHistoryScannedRow{}, err
 	}
+	if instruction == nil {
+		return acceptedHistoryScannedRow{}, errors.New("accepted instruction must be one JSON object")
+	}
 	var instructionExtra any
 	if err := instructionDecoder.Decode(&instructionExtra); !errors.Is(err, io.EOF) {
 		if err == nil {
