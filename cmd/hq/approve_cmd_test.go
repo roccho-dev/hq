@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"hq/internal/hqprofile"
@@ -52,23 +54,47 @@ func approvalCommandFixture(t *testing.T, payload map[string]any) (string, strin
 	return profileRoot, workspace
 }
 
-func TestApproveCommandAppendsOneIdempotentResourceApproval(t *testing.T) {
+func TestApproveCommandAppendsOneIdempotentResourceApprovalAcross32ConcurrentCalls(t *testing.T) {
 	profileRoot, workspace := approvalCommandFixture(t, map[string]any{
 		"tool_id": "aws", "tool_version": "2.35.11", "policy_version": "aws-restricted.v1",
 		"argv": []string{"sts", "get-caller-identity"},
 	})
 	args := []string{"--profile", "local", "--profile-root", profileRoot, "--instruction", "ins-approve-001", "--approved-by", "owner@example"}
-	for attempt := 0; attempt < 2; attempt++ {
-		var stdout, stderr bytes.Buffer
-		if code := runApprove(args, &stdout, &stderr); code != 0 {
-			t.Fatalf("attempt=%d code=%d stderr=%s", attempt, code, stderr.String())
+	type result struct {
+		record worker.ApprovalRecord
+		err    error
+	}
+	const attempts = 32
+	start := make(chan struct{})
+	results := make(chan result, attempts)
+	var ready sync.WaitGroup
+	ready.Add(attempts)
+	for attempt := 0; attempt < attempts; attempt++ {
+		go func() {
+			ready.Done()
+			<-start
+			var stdout, stderr bytes.Buffer
+			if code := runApprove(args, &stdout, &stderr); code != 0 {
+				results <- result{err: fmt.Errorf("code=%d stderr=%s", code, stderr.String())}
+				return
+			}
+			var record worker.ApprovalRecord
+			if err := json.Unmarshal(stdout.Bytes(), &record); err != nil {
+				results <- result{err: fmt.Errorf("stdout=%q: %w", stdout.String(), err)}
+				return
+			}
+			results <- result{record: record}
+		}()
+	}
+	ready.Wait()
+	close(start)
+	for attempt := 0; attempt < attempts; attempt++ {
+		result := <-results
+		if result.err != nil {
+			t.Fatal(result.err)
 		}
-		var record worker.ApprovalRecord
-		if err := json.Unmarshal(stdout.Bytes(), &record); err != nil {
-			t.Fatalf("stdout=%q err=%v", stdout.String(), err)
-		}
-		if record.InstructionID != "ins-approve-001" || record.ApprovedBy != "owner@example" || !strings.HasPrefix(record.InstructionDigest, "sha256:") {
-			t.Fatalf("record=%+v", record)
+		if result.record.InstructionID != "ins-approve-001" || result.record.ApprovedBy != "owner@example" || !strings.HasPrefix(result.record.InstructionDigest, "sha256:") {
+			t.Fatalf("record=%+v", result.record)
 		}
 	}
 	data, err := os.ReadFile(worker.WorkspaceApprovalPath(workspace))
@@ -77,6 +103,10 @@ func TestApproveCommandAppendsOneIdempotentResourceApproval(t *testing.T) {
 	}
 	if lines := strings.Count(strings.TrimSpace(string(data)), "\n") + 1; lines != 1 {
 		t.Fatalf("approval ledger contains %d rows: %s", lines, data)
+	}
+	store, err := worker.LoadWorkspaceApprovals(workspace)
+	if err != nil || store.ApprovalFor("ins-approve-001") == nil {
+		t.Fatalf("approval ledger unreadable: store=%+v err=%v", store, err)
 	}
 }
 
