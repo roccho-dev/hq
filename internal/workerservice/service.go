@@ -202,7 +202,7 @@ func processOnceSelected(ctx context.Context, profile hqprofile.Profile, world *
 	if err != nil {
 		return StateProviderUnavailable, err
 	}
-	approvals, err := worker.ApprovalsForAccepted(pending, "hq.submit:"+profile.DeploymentID)
+	approvals, err := managedApprovals(profile, pending)
 	if err != nil {
 		return StateEvidenceInvalid, err
 	}
@@ -218,6 +218,18 @@ func processOnceSelected(ctx context.Context, profile hqprofile.Profile, world *
 		return StateReconciliation, nil
 	}
 	return StateReady, nil
+}
+
+func managedApprovals(profile hqprofile.Profile, pending []worker.ReadRow) (worker.ApprovalStore, error) {
+	submitApprovals, err := worker.ApprovalsForAccepted(pending, "hq.submit:"+profile.DeploymentID)
+	if err != nil {
+		return worker.ApprovalStore{}, err
+	}
+	explicitApprovals, err := worker.LoadWorkspaceApprovals(profile.WorkspaceRoot)
+	if err != nil {
+		return worker.ApprovalStore{}, err
+	}
+	return worker.MergeApprovalStores(submitApprovals, explicitApprovals)
 }
 
 func hostRegistry(profile hqprofile.Profile) (*adapter.Registry, error) {
