@@ -44,7 +44,7 @@ func runSubcommand(args []string, stdin io.Reader, stdout, stderr io.Writer) (bo
 		fmt.Fprintln(stderr, "error:", err)
 		return true, 1
 	}
-	s, err := hqlsp.New(p)
+	s, err := hqlsp.NewWithAcceptedHistory(p)
 	if err != nil {
 		fmt.Fprintln(stderr, "error:", err)
 		return true, 1
