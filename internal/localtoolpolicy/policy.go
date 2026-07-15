@@ -31,7 +31,7 @@ func ValidateDefinition(policy core.LocalToolInvocation) error {
 		return fmt.Errorf("max_arg_bytes must be between 1 and %d", MaxArgBytes)
 	}
 	if err := validateUnique(policy.DeniedOptions, func(value string) bool {
-		return strings.HasPrefix(value, "--") && !strings.Contains(value, "=") && !strings.ContainsAny(value, " \t\r\n")
+		return len(value) > 2 && strings.HasPrefix(value, "--") && !strings.Contains(value, "=") && !strings.ContainsAny(value, " \t\r\n")
 	}, "denied_options"); err != nil {
 		return err
 	}
@@ -63,8 +63,8 @@ func ValidateInvocation(policy core.LocalToolInvocation, policyVersion string, a
 			return failure("resource_invocation_argv_limit", fmt.Sprintf("argv exceeds %d bytes", policy.MaxArgBytes))
 		}
 		for _, denied := range policy.DeniedOptions {
-			if argument == denied || strings.HasPrefix(argument, denied+"=") {
-				return failure("resource_invocation_option_denied", fmt.Sprintf("argv[%d] uses denied option %q", index, denied))
+			if matchesDeniedOption(argument, denied) {
+				return failure("resource_invocation_option_denied", fmt.Sprintf("argv[%d] uses denied option or abbreviation of %q", index, denied))
 			}
 		}
 		for _, prefix := range policy.DeniedArgumentPrefixes {
@@ -77,6 +77,18 @@ func ValidateInvocation(policy core.LocalToolInvocation, policyVersion string, a
 		}
 	}
 	return nil
+}
+
+// Python argparse accepts unambiguous long-option prefixes unless a caller
+// disables abbreviation. Resource policy therefore rejects both the exact
+// dangerous option and every syntactic long-option prefix that could resolve
+// to it. An ambiguous prefix is also safely rejected.
+func matchesDeniedOption(argument, denied string) bool {
+	name := argument
+	if index := strings.IndexByte(name, '='); index >= 0 {
+		name = name[:index]
+	}
+	return len(name) > 2 && strings.HasPrefix(name, "--") && strings.HasPrefix(denied, name)
 }
 
 func validateUnique(values []string, valid func(string) bool, field string) error {
