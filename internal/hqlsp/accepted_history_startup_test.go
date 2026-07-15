@@ -3,10 +3,12 @@ package hqlsp
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"hq/internal/hq"
 	"hq/internal/hqprofile"
@@ -125,3 +127,49 @@ func TestExplicitSubmitAppendsOneRowWithAcceptedInput(t *testing.T) {
 		t.Fatalf("accepted input=%#v", input)
 	}
 }
+
+func TestAcceptedHistoryBoundsNewestRowsBeforeEligibility(t *testing.T) {
+	world, err := hq.LoadSelectedWorldJSONL(strings.NewReader(acceptedHistoryWorld))
+	if err != nil {
+		t.Fatal(err)
+	}
+	acceptedPath := filepath.Join(t.TempDir(), "accepted.jsonl")
+	writeAcceptedHistoryFixture(t, acceptedPath, world)
+	file, err := os.OpenFile(acceptedPath, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2026, 7, 17, 0, 0, 0, 0, time.UTC)
+	for index := 0; index < 1000; index++ {
+		created := start.Add(time.Duration(index) * time.Second).Format(time.RFC3339Nano)
+		row := fmt.Sprintf(`{"kind":"accepted.instruction","queue":"instruction.jsonl","instruction":{"id":"legacy-%04d","version":"instruction.v1","op":"run","target":"demo","payload":{},"created_at":%q}}`, index, created)
+		if _, err := fmt.Fprintln(file, row); err != nil {
+			_ = file.Close()
+			t.Fatal(err)
+		}
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	records, report, err := (fileAcceptedHistoryReader{}).Read(acceptedPath)
+	if err != nil || report.Fatal {
+		t.Fatalf("read failed: records=%d report=%#v err=%v", len(records), report, err)
+	}
+	if len(records) != 0 || historyFindingCount(report, "legacy-row") != 1000 {
+		t.Fatalf("older eligible history escaped newest-row bound: records=%#v report=%#v", records, report)
+	}
+}
+
+func TestMalformedLegacyInstructionIsFatal(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "accepted.jsonl")
+	row := `{"kind":"accepted.instruction","queue":"instruction.jsonl","instruction":"not-an-object"}`
+	if err := os.WriteFile(path, []byte(row+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	records, report, err := (fileAcceptedHistoryReader{}).Read(path)
+	if err == nil || !report.Fatal || len(records) != 0 {
+		t.Fatalf("malformed legacy row did not disable history: records=%#v report=%#v err=%v", records, report, err)
+	}
+}
+
+func historyFindingCount(report interface{ GetFindings() }) int { return 0 }
