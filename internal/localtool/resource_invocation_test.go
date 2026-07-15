@@ -21,6 +21,7 @@ func invocableTool() core.LocalToolDefinition {
 			DeniedOptions: []string{
 				"--profile", "--region", "--endpoint-url", "--ca-bundle", "--no-sign-request",
 				"--no-verify-ssl", "--debug", "--cli-input-json", "--cli-input-yaml",
+				"--cli-auto-prompt", "--no-cli-auto-prompt",
 			},
 			DeniedArgumentPrefixes: []string{"file://", "fileb://", "@", "configure", "login", "sso"},
 			MaxArgv:                32,
@@ -107,6 +108,7 @@ func TestResourceInvocationRejectsPolicyEscapeBeforeProviderPreparation(t *testi
 		{"endpoint", []string{"sts", "get-caller-identity", "--endpoint-url", "https://example.invalid"}, "resource_invocation_option_denied"},
 		{"tls bypass", []string{"sts", "get-caller-identity", "--no-verify-ssl"}, "resource_invocation_option_denied"},
 		{"debug", []string{"sts", "get-caller-identity", "--debug"}, "resource_invocation_option_denied"},
+		{"auto prompt", []string{"sts", "get-caller-identity", "--cli-auto-prompt"}, "resource_invocation_option_denied"},
 		{"file", []string{"sts", "get-caller-identity", "file://secret.json"}, "resource_invocation_argument_denied"},
 		{"binary file", []string{"sts", "get-caller-identity", "fileb://secret.bin"}, "resource_invocation_argument_denied"},
 		{"configure", []string{"configure", "set", "profile.admin.region", "us-east-1"}, "resource_invocation_argument_denied"},
