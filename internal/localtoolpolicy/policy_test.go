@@ -14,6 +14,7 @@ func testPolicy() core.LocalToolInvocation {
 		DeniedOptions: []string{
 			"--profile", "--region", "--endpoint-url", "--ca-bundle", "--no-sign-request",
 			"--no-verify-ssl", "--debug", "--cli-input-json", "--cli-input-yaml",
+			"--cli-auto-prompt", "--no-cli-auto-prompt",
 		},
 		DeniedArgumentPrefixes: []string{"file://", "fileb://", "@", "configure", "login", "sso"},
 		MaxArgv:               32,
@@ -65,6 +66,9 @@ func TestInvocationRejectsAuthorityEscapeAndSecretArguments(t *testing.T) {
 		{"debug output", []string{"sts", "get-caller-identity", "--debug"}, "resource_invocation_option_denied"},
 		{"debug abbreviation", []string{"sts", "get-caller-identity", "--deb"}, "resource_invocation_option_denied"},
 		{"cli input abbreviation", []string{"sts", "get-caller-identity", "--cli-input-j={}"}, "resource_invocation_option_denied"},
+		{"auto prompt", []string{"sts", "get-caller-identity", "--cli-auto-prompt"}, "resource_invocation_option_denied"},
+		{"auto prompt abbreviation", []string{"sts", "get-caller-identity", "--cli-auto"}, "resource_invocation_option_denied"},
+		{"no auto prompt", []string{"sts", "get-caller-identity", "--no-cli-auto-prompt"}, "resource_invocation_option_denied"},
 		{"response file", []string{"sts", "get-caller-identity", "@request.json"}, "resource_invocation_argument_denied"},
 		{"text file indirection", []string{"sts", "get-caller-identity", "file://secret.json"}, "resource_invocation_argument_denied"},
 		{"binary file indirection", []string{"sts", "get-caller-identity", "fileb://secret.bin"}, "resource_invocation_argument_denied"},
