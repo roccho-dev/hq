@@ -17,9 +17,12 @@ func invocableTool() core.LocalToolDefinition {
 		BindingRef:             "local-tool.aws-restricted",
 		BindingContractVersion: "1",
 		Invocation: &core.LocalToolInvocation{
-			PolicyVersion:          "aws-restricted.v1",
-			DeniedOptions:          []string{"--profile", "--endpoint-url", "--ca-bundle", "--no-sign-request", "--cli-input-json", "--cli-input-yaml"},
-			DeniedArgumentPrefixes: []string{"file://", "@"},
+			PolicyVersion: "aws-restricted.v1",
+			DeniedOptions: []string{
+				"--profile", "--endpoint-url", "--ca-bundle", "--no-sign-request",
+				"--no-verify-ssl", "--debug", "--cli-input-json", "--cli-input-yaml",
+			},
+			DeniedArgumentPrefixes: []string{"file://", "fileb://", "@", "configure", "login", "sso"},
 			MaxArgv:                32,
 			MaxArgBytes:            4096,
 			Limits:                 core.LocalToolLimits{TimeoutMS: 60000, StdoutBytes: 1 << 20, StderrBytes: 1 << 20},
@@ -101,7 +104,13 @@ func TestResourceInvocationRejectsPolicyEscapeBeforeProviderPreparation(t *testi
 	}{
 		{"profile", []string{"sts", "get-caller-identity", "--profile=admin"}, "resource_invocation_option_denied"},
 		{"endpoint", []string{"sts", "get-caller-identity", "--endpoint-url", "https://example.invalid"}, "resource_invocation_option_denied"},
+		{"tls bypass", []string{"sts", "get-caller-identity", "--no-verify-ssl"}, "resource_invocation_option_denied"},
+		{"debug", []string{"sts", "get-caller-identity", "--debug"}, "resource_invocation_option_denied"},
 		{"file", []string{"sts", "get-caller-identity", "file://secret.json"}, "resource_invocation_argument_denied"},
+		{"binary file", []string{"sts", "get-caller-identity", "fileb://secret.bin"}, "resource_invocation_argument_denied"},
+		{"configure", []string{"configure", "set", "profile.admin.region", "us-east-1"}, "resource_invocation_argument_denied"},
+		{"login", []string{"login", "--remote"}, "resource_invocation_argument_denied"},
+		{"sso", []string{"sso", "login"}, "resource_invocation_argument_denied"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := preparer.Prepare(context.Background(), invocationRequest(tool, test.argv))
