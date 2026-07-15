@@ -19,7 +19,7 @@ func invocableTool() core.LocalToolDefinition {
 		Invocation: &core.LocalToolInvocation{
 			PolicyVersion: "aws-restricted.v1",
 			DeniedOptions: []string{
-				"--profile", "--endpoint-url", "--ca-bundle", "--no-sign-request",
+				"--profile", "--region", "--endpoint-url", "--ca-bundle", "--no-sign-request",
 				"--no-verify-ssl", "--debug", "--cli-input-json", "--cli-input-yaml",
 			},
 			DeniedArgumentPrefixes: []string{"file://", "fileb://", "@", "configure", "login", "sso"},
@@ -103,6 +103,7 @@ func TestResourceInvocationRejectsPolicyEscapeBeforeProviderPreparation(t *testi
 		code string
 	}{
 		{"profile", []string{"sts", "get-caller-identity", "--profile=admin"}, "resource_invocation_option_denied"},
+		{"region", []string{"sts", "get-caller-identity", "--reg=us-east-1"}, "resource_invocation_option_denied"},
 		{"endpoint", []string{"sts", "get-caller-identity", "--endpoint-url", "https://example.invalid"}, "resource_invocation_option_denied"},
 		{"tls bypass", []string{"sts", "get-caller-identity", "--no-verify-ssl"}, "resource_invocation_option_denied"},
 		{"debug", []string{"sts", "get-caller-identity", "--debug"}, "resource_invocation_option_denied"},
