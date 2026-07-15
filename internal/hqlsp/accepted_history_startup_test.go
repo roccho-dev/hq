@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"hq/internal/core"
 	"hq/internal/hq"
 	"hq/internal/hqprofile"
 )
@@ -172,4 +173,11 @@ func TestMalformedLegacyInstructionIsFatal(t *testing.T) {
 	}
 }
 
-func historyFindingCount(report interface{ GetFindings() }) int { return 0 }
+func historyFindingCount(report core.AcceptedHistoryReport, code string) int {
+	for _, finding := range report.Findings {
+		if finding.Code == code {
+			return finding.Count
+		}
+	}
+	return 0
+}
