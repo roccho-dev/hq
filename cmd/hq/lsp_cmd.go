@@ -22,6 +22,9 @@ func runSubcommand(args []string, stdin io.Reader, stdout, stderr io.Writer) (bo
 	if len(args) >= 2 && args[0] == "profile" && args[1] == "inspect" {
 		return true, runProfileInspect(args[2:], stdout, stderr)
 	}
+	if len(args) >= 1 && args[0] == "approve" {
+		return true, runApprove(args[1:], stdout, stderr)
+	}
 	if len(args) == 0 || args[0] != "lsp" {
 		return false, 0
 	}
