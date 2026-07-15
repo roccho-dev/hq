@@ -69,8 +69,10 @@ The selected world owns a bounded invocation policy:
 - stable `policy_version`;
 - maximum argument count and total UTF-8 bytes;
 - timeout, stdout, and stderr bounds;
-- denied authority-changing options, including both `--flag value` and `--flag=value` forms;
+- denied authority-changing options;
 - denied argument prefixes such as response files or `file://` indirection.
+
+A denied long option is rejected in exact form, `--option=value` form, and any syntactic long-option abbreviation that could resolve to it. Ambiguous abbreviations also fail closed. Exact safe options that merely share an early prefix remain allowed.
 
 The worker also rejects empty/NUL arguments and known secret-shaped material. This is a defensive check, not permission to place secrets in queue input.
 
@@ -98,7 +100,7 @@ The implementation PR must prove deterministically:
 
 1. one resource definition prepares at least three distinct AWS-shaped argv vectors with zero actions;
 2. literal shell punctuation remains one argument;
-3. denied profile, endpoint, response-file, file-indirection, secret-shaped, limit, policy-drift, stale-approval, unknown-resource, stale-binding, and executable-tamper cases start zero process;
+3. denied exact/equals/abbreviated profile and endpoint options, response-file and file indirection, secret-shaped values, limits, policy drift, stale approval, unknown resource, stale binding, and executable tamper start zero process;
 4. the managed worker leaves missing approval durably held, `hq approve` appends one exact record, and later exact approval resumes the same run exactly once;
 5. existing finite-action behavior remains green.
 
