@@ -25,15 +25,18 @@ type CandidateMatch struct {
 }
 
 type CandidateRank struct {
-	ScopeCompatibility int `json:"scope_compatibility"`
-	WorstClass         int `json:"worst_class"`
-	ExactCount         int `json:"exact_count"`
-	PrefixCount        int `json:"prefix_count"`
-	SubstringCount     int `json:"substring_count"`
-	DirectCount        int `json:"direct_count"`
-	SubsequenceScore   int `json:"subsequence_score"`
-	RequiredPreference int `json:"required_preference"`
-	CandidateKind      int `json:"candidate_kind"`
+	ScopeCompatibility int   `json:"scope_compatibility"`
+	WorstClass         int   `json:"worst_class"`
+	ExactCount         int   `json:"exact_count"`
+	PrefixCount        int   `json:"prefix_count"`
+	SubstringCount     int   `json:"substring_count"`
+	DirectCount        int   `json:"direct_count"`
+	SubsequenceScore   int   `json:"subsequence_score"`
+	RequiredPreference int   `json:"required_preference"`
+	SourcePreference   int   `json:"source_preference,omitempty"`
+	CandidateKind      int   `json:"candidate_kind"`
+	HistoryRecency     int64 `json:"history_recency,omitempty"`
+	HistoryFrequency   int   `json:"history_frequency,omitempty"`
 }
 
 type CandidateEdit struct {
@@ -113,6 +116,7 @@ func candidateRank(rank core.WorldRecallRank) CandidateRank {
 		ExactCount: rank.ExactCount, PrefixCount: rank.PrefixCount,
 		SubstringCount: rank.SubstringCount, DirectCount: rank.DirectCount,
 		SubsequenceScore: rank.SubsequenceScore, RequiredPreference: rank.RequiredPreference,
-		CandidateKind: rank.CandidateKind,
+		SourcePreference: rank.SourcePreference, CandidateKind: rank.CandidateKind,
+		HistoryRecency: rank.HistoryRecency, HistoryFrequency: rank.HistoryFrequency,
 	}
 }
