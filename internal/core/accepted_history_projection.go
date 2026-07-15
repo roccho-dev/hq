@@ -1,0 +1,262 @@
+package core
+
+import (
+	"encoding/json"
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+)
+
+type historyGroupSource struct {
+	ID     string
+	At     time.Time
+	Digest string
+}
+
+type historyObjectGroup struct {
+	Command         CommandDefinition
+	CommandRef      CommandRef
+	Materialization string
+	MaterialDigest  string
+	SearchFields    []AcceptedInputField
+	Frequency       int
+	Latest          time.Time
+	Sources         []historyGroupSource
+}
+
+type historyValueGroup struct {
+	Command    CommandDefinition
+	CommandRef CommandRef
+	Field      CommandField
+	Value      any
+	ValueText  string
+	ValueDigest string
+	Frequency  int
+	Latest     time.Time
+	Sources    []historyGroupSource
+}
+
+type combinedRecallIndexPreimage struct {
+	Kind                    string                `json:"kind"`
+	WorldDigest             string                `json:"world_digest"`
+	HistoryProjectionDigest string                `json:"history_projection_digest"`
+	NormalizationVersion    string                `json:"normalization_version"`
+	Matcher                 recallMatcherIdentity `json:"matcher"`
+	RankVersion             string                `json:"rank_version"`
+	MaterializerVersion     string                `json:"materializer_version"`
+	AcceptedInputVersion    string                `json:"accepted_input_version"`
+	HistoryPolicyVersion    string                `json:"history_policy_version"`
+	HistoryReductionVersion string                `json:"history_reduction_version"`
+}
+
+type historyProjectionRow struct {
+	AcceptedID string               `json:"accepted_id"`
+	AcceptedAt string               `json:"accepted_at"`
+	Digest     string               `json:"accepted_input_digest"`
+	Command    CommandRef           `json:"command"`
+	Fields     []AcceptedInputField `json:"fields"`
+	Complete   bool                 `json:"recall_complete"`
+}
+
+// AttachAcceptedHistory returns the original world-only index on any fatal
+// history failure or when no history candidate survives. It never mutates base.
+func AttachAcceptedHistory(world *JsonlWorld, base *WorldRecallIndex, records []AcceptedHistoryRecord, identify WorldRecallCandidateIdentifier) (*WorldRecallIndex, AcceptedHistoryReport) {
+	if world == nil || base == nil || identify == nil || len(records) == 0 {
+		return base, AcceptedHistoryReport{}
+	}
+	counts := map[string]int{}
+	seenID := map[string]string{}
+	eligible := make([]AcceptedHistoryRecord, 0, len(records))
+	projectionRows := make([]historyProjectionRow, 0, len(records))
+	for _, record := range records {
+		identity := record.Provenance.InstructionDigest + "\x00" + record.Input.AcceptedInputDigest
+		if prior, duplicate := seenID[record.AcceptedID]; duplicate {
+			if prior != identity {
+				counts["conflicting-accepted-id"]++
+				return base, AcceptedHistoryReport{Fatal: true, Findings: SortHistoryFindings(counts)}
+			}
+			counts["duplicate-accepted-id"]++
+			continue
+		}
+		seenID[record.AcceptedID] = identity
+		command, commandRef, ok, code := eligibleAcceptedHistoryRecord(world, record)
+		if !ok {
+			counts[code]++
+			continue
+		}
+		_ = command
+		eligible = append(eligible, record)
+		projectionRows = append(projectionRows, historyProjectionRow{
+			AcceptedID: record.AcceptedID, AcceptedAt: record.AcceptedAt.UTC().Format(time.RFC3339Nano),
+			Digest: record.Input.AcceptedInputDigest, Command: commandRef,
+			Fields: append([]AcceptedInputField(nil), record.Input.Fields...), Complete: record.Input.RecallComplete,
+		})
+	}
+	if len(eligible) == 0 {
+		return base, AcceptedHistoryReport{Findings: SortHistoryFindings(counts)}
+	}
+	sort.Slice(projectionRows, func(i, j int) bool {
+		if projectionRows[i].AcceptedAt != projectionRows[j].AcceptedAt { return projectionRows[i].AcceptedAt > projectionRows[j].AcceptedAt }
+		if projectionRows[i].AcceptedID != projectionRows[j].AcceptedID { return projectionRows[i].AcceptedID < projectionRows[j].AcceptedID }
+		return projectionRows[i].Digest < projectionRows[j].Digest
+	})
+	projectionDigest, err := CanonicalDigest(struct { Kind string `json:"kind"`; Rows []historyProjectionRow `json:"rows"` }{AcceptedHistoryProjectionKind, projectionRows})
+	if err != nil {
+		counts["projection-digest-failed"]++
+		return base, AcceptedHistoryReport{Fatal: true, Findings: SortHistoryFindings(counts)}
+	}
+	objects := reduceHistoryObjects(world, eligible)
+	values := reduceHistoryValues(world, eligible)
+	newCandidates := historyCandidates(objects, values)
+	if len(newCandidates) == 0 {
+		return base, AcceptedHistoryReport{Findings: SortHistoryFindings(counts)}
+	}
+	if err := prepareRecallCandidates(newCandidates, identify); err != nil {
+		counts["candidate-identity-failed"]++
+		return base, AcceptedHistoryReport{Fatal: true, Findings: SortHistoryFindings(counts)}
+	}
+	combinedID, err := CanonicalDigest(combinedRecallIndexPreimage{
+		Kind: WorldRecallIndexKind, WorldDigest: base.world.Digest, HistoryProjectionDigest: projectionDigest,
+		NormalizationVersion: WorldRecallNormalizationVersion,
+		Matcher: recallMatcherIdentity{Module: WorldRecallMatcherModule, Version: WorldRecallMatcherVersion},
+		RankVersion: WorldHistoryRecallRankVersion, MaterializerVersion: CommandObjectMaterializerVersion,
+		AcceptedInputVersion: AcceptedInputKind, HistoryPolicyVersion: HistoryPolicyContractVersion,
+		HistoryReductionVersion: HistoryReductionContractVersion,
+	})
+	if err != nil {
+		counts["combined-index-identity-failed"]++
+		return base, AcceptedHistoryReport{Fatal: true, Findings: SortHistoryFindings(counts)}
+	}
+	combined := &WorldRecallIndex{id: combinedID, world: base.world, history: true}
+	combined.candidates = append(combined.candidates, base.candidates...)
+	combined.candidates = append(combined.candidates, newCandidates...)
+	return combined, AcceptedHistoryReport{Findings: SortHistoryFindings(counts)}
+}
+
+func eligibleAcceptedHistoryRecord(world *JsonlWorld, record AcceptedHistoryRecord) (CommandDefinition, CommandRef, bool, string) {
+	if record.AcceptedID == "" || record.AcceptedAt.IsZero() {
+		return CommandDefinition{}, CommandRef{}, false, "missing-accepted-identity"
+	}
+	if err := record.Provenance.Validate(); err != nil || record.Provenance.Command == nil {
+		return CommandDefinition{}, CommandRef{}, false, "missing-provenance"
+	}
+	if err := record.Input.Validate(); err != nil {
+		return CommandDefinition{}, CommandRef{}, false, "invalid-accepted-input"
+	}
+	if record.Input.InstructionDigest != record.Provenance.InstructionDigest || record.Input.World != record.Provenance.World || record.Input.Command != *record.Provenance.Command {
+		return CommandDefinition{}, CommandRef{}, false, "accepted-input-provenance-mismatch"
+	}
+	currentWorld, selected := world.SelectedRef()
+	if !selected || currentWorld.WorldID != record.Input.World.WorldID {
+		return CommandDefinition{}, CommandRef{}, false, "incompatible-world"
+	}
+	command, ok := world.CommandByID(record.Input.Command.CommandID)
+	if !ok {
+		return CommandDefinition{}, CommandRef{}, false, "missing-current-command"
+	}
+	commandRef, ok := world.CommandRef(command.Name)
+	if !ok || commandRef != record.Input.Command {
+		return CommandDefinition{}, CommandRef{}, false, "incompatible-command"
+	}
+	position := -1
+	present := map[string]bool{}
+	for _, inputField := range record.Input.Fields {
+		fieldIndex := -1
+		var field CommandField
+		for i, candidate := range command.Fields {
+			if candidate.Name == inputField.Name { fieldIndex, field = i, candidate; break }
+		}
+		if fieldIndex < 0 || fieldIndex <= position || present[inputField.Name] {
+			return CommandDefinition{}, CommandRef{}, false, "invalid-field-order"
+		}
+		position = fieldIndex
+		present[inputField.Name] = true
+		if field.Type != inputField.Type || !HistoryPolicyPersists(field) || !ValidateAcceptedInputValue(field, inputField.Value) {
+			return CommandDefinition{}, CommandRef{}, false, "field-policy-or-value-mismatch"
+		}
+	}
+	if record.Input.RecallComplete {
+		for _, field := range command.Fields {
+			if field.Required && !present[field.Name] {
+				return CommandDefinition{}, CommandRef{}, false, "incomplete-current-command"
+			}
+		}
+	}
+	return command, commandRef, true, ""
+}
+
+func reduceHistoryObjects(world *JsonlWorld, records []AcceptedHistoryRecord) []historyObjectGroup {
+	groups := map[string]*historyObjectGroup{}
+	for _, record := range records {
+		if !record.Input.RecallComplete { continue }
+		command, _ := world.CommandByID(record.Input.Command.CommandID)
+		material := renderAcceptedInput(command, record.Input.Fields)
+		if len(material) > MaxAcceptedInputMaterialization { continue }
+		digest, _ := CanonicalDigest(material)
+		key := record.Input.Command.Digest + "\x00" + digest
+		group := groups[key]
+		if group == nil {
+			group = &historyObjectGroup{Command: command, CommandRef: record.Input.Command, Materialization: material, MaterialDigest: digest}
+			for _, inputField := range record.Input.Fields {
+				field, _ := commandFieldByName(command, inputField.Name)
+				if HistoryPolicySearches(field) { group.SearchFields = append(group.SearchFields, inputField) }
+			}
+			groups[key] = group
+		}
+		group.Frequency++
+		if record.AcceptedAt.After(group.Latest) { group.Latest = record.AcceptedAt }
+		group.Sources = append(group.Sources, historyGroupSource{record.AcceptedID, record.AcceptedAt, record.Input.AcceptedInputDigest})
+	}
+	out := make([]historyObjectGroup, 0, len(groups))
+	for _, group := range groups { group.Sources = reduceHistorySources(group.Sources); out = append(out, *group) }
+	sort.Slice(out, func(i, j int) bool { if !out[i].Latest.Equal(out[j].Latest) { return out[i].Latest.After(out[j].Latest) }; if out[i].Frequency != out[j].Frequency { return out[i].Frequency > out[j].Frequency }; return out[i].MaterialDigest < out[j].MaterialDigest })
+	if len(out) > MaxHistoryObjectPresets { out = out[:MaxHistoryObjectPresets] }
+	return out
+}
+
+func reduceHistoryValues(world *JsonlWorld, records []AcceptedHistoryRecord) []historyValueGroup {
+	groups := map[string]*historyValueGroup{}
+	for _, record := range records {
+		command, _ := world.CommandByID(record.Input.Command.CommandID)
+		for _, inputField := range record.Input.Fields {
+			field, ok := commandFieldByName(command, inputField.Name); if !ok { continue }
+			text := AcceptedInputValueText(inputField.Value); digest, _ := CanonicalDigest(inputField.Value)
+			key := record.Input.Command.Digest + "\x00" + field.Name + "\x00" + digest
+			group := groups[key]
+			if group == nil { group = &historyValueGroup{Command: command, CommandRef: record.Input.Command, Field: field, Value: inputField.Value, ValueText: text, ValueDigest: digest}; groups[key] = group }
+			group.Frequency++
+			if record.AcceptedAt.After(group.Latest) { group.Latest = record.AcceptedAt }
+			group.Sources = append(group.Sources, historyGroupSource{record.AcceptedID, record.AcceptedAt, record.Input.AcceptedInputDigest})
+		}
+	}
+	byField := map[string][]historyValueGroup{}
+	for _, group := range groups { group.Sources = reduceHistorySources(group.Sources); key := group.CommandRef.Digest + "\x00" + group.Field.Name; byField[key] = append(byField[key], *group) }
+	out := []historyValueGroup{}
+	keys := make([]string, 0, len(byField)); for key := range byField { keys = append(keys, key) }; sort.Strings(keys)
+	for _, key := range keys { values := byField[key]; sort.Slice(values, func(i, j int) bool { if !values[i].Latest.Equal(values[j].Latest) { return values[i].Latest.After(values[j].Latest) }; if values[i].Frequency != values[j].Frequency { return values[i].Frequency > values[j].Frequency }; return values[i].ValueDigest < values[j].ValueDigest }); if len(values) > MaxHistoryValuesPerField { values = values[:MaxHistoryValuesPerField] }; out = append(out, values...) }
+	return out
+}
+
+func historyCandidates(objects []historyObjectGroup, values []historyValueGroup) []recallCandidate {
+	out := make([]recallCandidate, 0, len(objects)+len(values))
+	for _, group := range objects {
+		terms := recallCommandTerms(group.Command)
+		for _, inputField := range group.SearchFields { if text := AcceptedInputValueText(inputField.Value); HistorySearchableText(text) { terms = append(terms, recallTerm{Kind: "history.search", Path: recallFieldPath(group.Command.Name, inputField.Name)+".accepted", Text: text}) } }
+		out = append(out, recallCandidate{World: group.CommandRefWorld(), Command: group.CommandRef, Scope: WorldRecallObjectQuery, Kind: WorldRecallObjectPreset, CommandName: group.Command.Name, Label: group.Command.Name, Detail: "object_preset | accepted history", Description: fmt.Sprintf("Accepted history; frequency %d; latest %s", group.Frequency, group.Latest.UTC().Format(time.RFC3339Nano)), Materialization: group.Materialization, Terms: terms, StructuralRefs: historySourceRefs(group.Sources), SourcePreference: 1, HistoryRecency: group.Latest.UnixNano(), HistoryFrequency: group.Frequency, HistoryRecent: true})
+	}
+	for _, group := range values {
+		terms := []recallTerm{}
+		if HistorySearchableText(group.ValueText) { terms = append(terms, recallTerm{Kind: "history.field_value", Path: recallFieldPath(group.Command.Name, group.Field.Name)+"."+group.ValueDigest, Text: group.ValueText}) }
+		out = append(out, recallCandidate{World: group.CommandRefWorld(), Command: group.CommandRef, Scope: WorldRecallFieldValue, Kind: WorldRecallFieldValueKind, CommandName: group.Command.Name, FieldName: group.Field.Name, Label: group.ValueText, Detail: "field_value | accepted history", Description: fmt.Sprintf("Accepted history; frequency %d; latest %s", group.Frequency, group.Latest.UTC().Format(time.RFC3339Nano)), Materialization: quoteCommandMaterial(group.ValueText), Terms: terms, StructuralRefs: historySourceRefs(group.Sources), SourcePreference: 1, HistoryRecency: group.Latest.UnixNano(), HistoryFrequency: group.Frequency})
+	}
+	return out
+}
+
+func (group historyObjectGroup) CommandRefWorld() WorldRef { return WorldRef{} }
+func (group historyValueGroup) CommandRefWorld() WorldRef { return WorldRef{} }
+
+func renderAcceptedInput(command CommandDefinition, fields []AcceptedInputField) string { lines := []string{"@"+command.Name}; for _, field := range fields { lines = append(lines, field.Name+"="+quoteCommandMaterial(AcceptedInputValueText(field.Value))) }; return strings.Join(lines, "\n") }
+func commandFieldByName(command CommandDefinition, name string) (CommandField, bool) { for _, field := range command.Fields { if field.Name == name { return field, true } }; return CommandField{}, false }
+func reduceHistorySources(sources []historyGroupSource) []historyGroupSource { sort.Slice(sources, func(i, j int) bool { if !sources[i].At.Equal(sources[j].At) { return sources[i].At.After(sources[j].At) }; if sources[i].ID != sources[j].ID { return sources[i].ID < sources[j].ID }; return sources[i].Digest < sources[j].Digest }); unique := sources[:0]; for _, source := range sources { if len(unique)==0 || unique[len(unique)-1].ID != source.ID { unique=append(unique,source) } }; if len(unique)>MaxHistorySources { unique=unique[:MaxHistorySources] }; return unique }
+func historySourceRefs(sources []historyGroupSource) []WorldRecallStructuralRef { refs:=make([]WorldRecallStructuralRef,0,len(sources)); for _,source:=range sources { encoded,_:=json.Marshal(struct{ID string `json:"accepted_id"`; At string `json:"accepted_at"`; Digest string `json:"accepted_input_digest"`}{source.ID,source.At.UTC().Format(time.RFC3339Nano),source.Digest}); refs=append(refs,WorldRecallStructuralRef{TermKind:"history.accepted",TermPath:string(encoded)}) }; return refs }
