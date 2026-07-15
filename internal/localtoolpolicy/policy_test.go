@@ -30,7 +30,7 @@ func TestDefinitionAndDistinctAWSInvocations(t *testing.T) {
 	for _, argv := range [][]string{
 		{"sts", "get-caller-identity", "--output", "json", "--no-cli-pager"},
 		{"apigateway", "get-rest-api", "--rest-api-id", "api-123", "--no-cli-pager"},
-		{"iam", "list-roles", "--no-cli-pager"},
+		{"iam", "list-roles", "--cli-connect-timeout", "10", "--no-cli-pager"},
 	} {
 		if err := ValidateInvocation(policy, policy.PolicyVersion, argv); err != nil {
 			t.Fatalf("argv=%q err=%v", argv, err)
@@ -55,9 +55,14 @@ func TestInvocationRejectsAuthorityEscapeAndSecretArguments(t *testing.T) {
 	}{
 		{"profile separate", []string{"sts", "get-caller-identity", "--profile", "admin"}, "resource_invocation_option_denied"},
 		{"profile equals", []string{"sts", "get-caller-identity", "--profile=admin"}, "resource_invocation_option_denied"},
+		{"profile abbreviation", []string{"sts", "get-caller-identity", "--prof=admin"}, "resource_invocation_option_denied"},
 		{"endpoint", []string{"sts", "get-caller-identity", "--endpoint-url=https://example.invalid"}, "resource_invocation_option_denied"},
+		{"endpoint abbreviation", []string{"sts", "get-caller-identity", "--end=https://example.invalid"}, "resource_invocation_option_denied"},
 		{"tls bypass", []string{"sts", "get-caller-identity", "--no-verify-ssl"}, "resource_invocation_option_denied"},
+		{"tls abbreviation", []string{"sts", "get-caller-identity", "--no-v"}, "resource_invocation_option_denied"},
 		{"debug output", []string{"sts", "get-caller-identity", "--debug"}, "resource_invocation_option_denied"},
+		{"debug abbreviation", []string{"sts", "get-caller-identity", "--deb"}, "resource_invocation_option_denied"},
+		{"cli input abbreviation", []string{"sts", "get-caller-identity", "--cli-input-j={}"}, "resource_invocation_option_denied"},
 		{"response file", []string{"sts", "get-caller-identity", "@request.json"}, "resource_invocation_argument_denied"},
 		{"text file indirection", []string{"sts", "get-caller-identity", "file://secret.json"}, "resource_invocation_argument_denied"},
 		{"binary file indirection", []string{"sts", "get-caller-identity", "fileb://secret.bin"}, "resource_invocation_argument_denied"},
