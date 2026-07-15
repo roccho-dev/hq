@@ -37,11 +37,11 @@ No second queue, worker lifecycle, executor authority, or result vocabulary exis
 
 The payload contains no executable path, binding path, deployment ID, environment, credential, profile, account, configuration, working directory, stdin, or shell command string.
 
-`policy_version` is part of the exact instruction digest. A changed policy therefore requires a newly accepted instruction and approval.
+An invocation-policy content change must use a new `policy_version`. That version is part of the exact instruction digest, so changed policy meaning requires a newly accepted instruction and approval.
 
 ## Held and runnable work
 
-A valid invocation with no current exact approval produces:
+A structurally valid invocation with no current exact approval produces:
 
 - one `worker.policy.v1` row with `status=approval_required`;
 - one `result.v1` `accepted` row;
@@ -52,7 +52,7 @@ A valid invocation with no current exact approval produces:
 
 That accepted run remains queued. Re-polling without any state change appends no duplicate held evidence. When an approval matching the exact instruction digest appears, the same run ID becomes runnable and proceeds through the normal worker lifecycle.
 
-A stale approval, invalid payload, resource-policy rejection, missing resource, binding mismatch, or executable tamper is not held. It remains non-green and starts zero process.
+Malformed payloads and stale approvals are immediately non-green. Resource-policy rejection, missing resource, binding mismatch, and executable tamper are checked after exact approval but before process effect; they produce terminal non-green evidence and zero process start. No denied invocation can reach `started` through a successful provider preparation.
 
 ## Resource policy
 
