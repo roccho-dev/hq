@@ -24,7 +24,7 @@ func TestSchemaRejectsMalformedLocalToolComposition(t *testing.T) {
 	tests := map[string]string{
 		"unknown dependency": strings.NewReplacer("BINDINGS", `[]`, "ARGV", `[{"binding_executable":"missing"}]`).Replace(base),
 		"mixed tagged union": strings.NewReplacer("BINDINGS", `[{"name":"child","binding_ref":"local-tool.child","binding_contract_version":"1"}]`, "ARGV", `[{"literal":"run","binding_executable":"child"}]`).Replace(base),
-		"unsorted bindings": strings.NewReplacer("BINDINGS", `[{"name":"z","binding_ref":"local-tool.z","binding_contract_version":"1"},{"name":"a","binding_ref":"local-tool.a","binding_contract_version":"1"}]`, "ARGV", `[{"literal":"run"}]`).Replace(base),
+		"duplicate binding name": strings.NewReplacer("BINDINGS", `[{"name":"same","binding_ref":"local-tool.a","binding_contract_version":"1"},{"name":"same","binding_ref":"local-tool.b","binding_contract_version":"1"}]`, "ARGV", `[{"literal":"run"}]`).Replace(base),
 		"duplicate binding ref": strings.NewReplacer("BINDINGS", `[{"name":"a","binding_ref":"local-tool.same","binding_contract_version":"1"},{"name":"b","binding_ref":"local-tool.same","binding_contract_version":"1"}]`, "ARGV", `[{"literal":"run"}]`).Replace(base),
 		"primary reused": strings.NewReplacer("BINDINGS", `[{"name":"child","binding_ref":"local-tool.demo","binding_contract_version":"1"}]`, "ARGV", `[{"binding_executable":"child"}]`).Replace(base),
 	}
