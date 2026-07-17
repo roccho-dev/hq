@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"hq/internal/worker/adapter"
 )
 
 var canonicalTargets = map[string]struct{}{"sh": {}, "herdr": {}, "codex": {}, "claude": {}, "host": {}, "local-tool": {}}
@@ -75,18 +77,28 @@ func (r ResultRow) Validate() error {
 	return nil
 }
 func (p ProviderEvidence) Validate() error {
-	for f, v := range map[string]string{"capability_id": p.CapabilityID, "provider_id": p.ProviderID, "contract_version": p.ContractVersion, "deployment_id": p.DeploymentID, "provider_kind": p.ProviderKind, "integrity_digest": p.IntegrityDigest} {
-		if strings.TrimSpace(v) == "" {
-			return fmt.Errorf("provider %s is required", f)
-		}
-	}
 	if (p.IdempotencyContract == "") != (p.IdempotencyKey == "") {
 		return errors.New("idempotency_contract and idempotency_key must appear together")
 	}
-	return nil
+	return p.descriptor().Validate()
 }
-func (p ProviderEvidence) SameProvider(o ProviderEvidence) bool {
-	return p.CapabilityID == o.CapabilityID && p.ProviderID == o.ProviderID && p.ContractVersion == o.ContractVersion && p.DeploymentID == o.DeploymentID && p.ProviderKind == o.ProviderKind && p.IntegrityDigest == o.IntegrityDigest && p.IdempotencyContract == o.IdempotencyContract
+func (p ProviderEvidence) SameProvider(other ProviderEvidence) bool {
+	return p.descriptor().Equal(other.descriptor())
+}
+func (p ProviderEvidence) descriptor() adapter.ProviderDescriptor {
+	dependencies := make([]adapter.ProviderDependencyDescriptor, 0, len(p.Dependencies))
+	for _, dependency := range p.Dependencies {
+		dependencies = append(dependencies, adapter.ProviderDependencyDescriptor{
+			Name: dependency.Name, ProviderID: dependency.ProviderID, ContractVersion: dependency.ContractVersion,
+			DeploymentID: dependency.DeploymentID, ProviderKind: dependency.ProviderKind,
+			IntegrityDigest: dependency.IntegrityDigest, ConfigurationDigest: dependency.ConfigurationDigest,
+		})
+	}
+	return adapter.ProviderDescriptor{
+		CapabilityID: p.CapabilityID, ProviderID: p.ProviderID, ContractVersion: p.ContractVersion,
+		DeploymentID: p.DeploymentID, ProviderKind: p.ProviderKind, IntegrityDigest: p.IntegrityDigest,
+		ConfigurationDigest: p.ConfigurationDigest, Dependencies: dependencies, IdempotencyContract: p.IdempotencyContract,
+	}
 }
 func (e ResultError) Validate() error {
 	if strings.TrimSpace(e.Code) == "" || strings.TrimSpace(e.Message) == "" {
