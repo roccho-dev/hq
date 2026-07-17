@@ -12,10 +12,10 @@ func TestProviderDescriptorValidatesAndComparesOrderedDependencies(t *testing.T)
 		CapabilityID: "local-tool:demo@1/start", ProviderID: "local-tool.demo", ContractVersion: "2",
 		DeploymentID: "app.demo@1:" + digestA, ProviderKind: "executable", IntegrityDigest: digestA,
 		ConfigurationDigest: digestB,
-		Dependencies: []ProviderDependencyDescriptor{{
-			Name: "child", ProviderID: "local-tool.child", ContractVersion: "1",
-			DeploymentID: "app.child@1:" + digestB, ProviderKind: "executable", IntegrityDigest: digestB,
-		}},
+		Dependencies: []ProviderDependencyDescriptor{
+			{Name: "second", ProviderID: "local-tool.second", ContractVersion: "1", DeploymentID: "app.second@1:" + digestB, ProviderKind: "executable", IntegrityDigest: digestB},
+			{Name: "first", ProviderID: "local-tool.first", ContractVersion: "1", DeploymentID: "app.first@1:" + digestA, ProviderKind: "executable", IntegrityDigest: digestA},
+		},
 	}
 	if err := descriptor.Validate(); err != nil {
 		t.Fatal(err)
@@ -30,31 +30,28 @@ func TestProviderDescriptorValidatesAndComparesOrderedDependencies(t *testing.T)
 		t.Fatal("dependency digest drift compared equal")
 	}
 	copy = descriptor
+	copy.Dependencies = []ProviderDependencyDescriptor{descriptor.Dependencies[1], descriptor.Dependencies[0]}
+	if descriptor.Equal(copy) {
+		t.Fatal("dependency reordering compared equal")
+	}
+	copy = descriptor
 	copy.ConfigurationDigest = digestA
 	if descriptor.Equal(copy) {
 		t.Fatal("primary configuration drift compared equal")
 	}
 }
 
-func TestProviderDescriptorRejectsDuplicateOrUnsortedDependencies(t *testing.T) {
+func TestProviderDescriptorRejectsDuplicateDependencyNames(t *testing.T) {
 	digest := "sha256:" + strings.Repeat("c", 64)
-	base := ProviderDescriptor{
+	dependency := func(provider string) ProviderDependencyDescriptor {
+		return ProviderDependencyDescriptor{Name: "same", ProviderID: provider, ContractVersion: "1", DeploymentID: "deployment." + provider, ProviderKind: "executable", IntegrityDigest: digest}
+	}
+	descriptor := ProviderDescriptor{
 		CapabilityID: "cap", ProviderID: "provider", ContractVersion: "1", DeploymentID: "deployment",
 		ProviderKind: "executable", IntegrityDigest: digest,
+		Dependencies: []ProviderDependencyDescriptor{dependency("binding.a"), dependency("binding.b")},
 	}
-	dependency := func(name string) ProviderDependencyDescriptor {
-		return ProviderDependencyDescriptor{Name: name, ProviderID: "binding." + name, ContractVersion: "1", DeploymentID: "deployment." + name, ProviderKind: "executable", IntegrityDigest: digest}
-	}
-	for name, dependencies := range map[string][]ProviderDependencyDescriptor{
-		"duplicate": {dependency("same"), dependency("same")},
-		"unsorted":  {dependency("z"), dependency("a")},
-	} {
-		t.Run(name, func(t *testing.T) {
-			candidate := base
-			candidate.Dependencies = dependencies
-			if err := candidate.Validate(); err == nil {
-				t.Fatalf("accepted dependencies=%+v", dependencies)
-			}
-		})
+	if err := descriptor.Validate(); err == nil {
+		t.Fatalf("accepted duplicate dependencies=%+v", descriptor.Dependencies)
 	}
 }
