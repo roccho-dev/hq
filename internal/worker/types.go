@@ -112,14 +112,25 @@ type FinalResult struct {
 	Path string `json:"path,omitempty"`
 }
 type ProviderEvidence struct {
-	CapabilityID        string `json:"capability_id"`
+	CapabilityID        string                       `json:"capability_id"`
+	ProviderID          string                       `json:"provider_id"`
+	ContractVersion     string                       `json:"contract_version"`
+	DeploymentID        string                       `json:"deployment_id"`
+	ProviderKind        string                       `json:"provider_kind"`
+	IntegrityDigest     string                       `json:"integrity_digest"`
+	ConfigurationDigest string                       `json:"configuration_digest,omitempty"`
+	Dependencies        []ProviderDependencyEvidence `json:"dependencies,omitempty"`
+	IdempotencyContract string                       `json:"idempotency_contract,omitempty"`
+	IdempotencyKey      string                       `json:"idempotency_key,omitempty"`
+}
+type ProviderDependencyEvidence struct {
+	Name                string `json:"name"`
 	ProviderID          string `json:"provider_id"`
 	ContractVersion     string `json:"contract_version"`
 	DeploymentID        string `json:"deployment_id"`
 	ProviderKind        string `json:"provider_kind"`
 	IntegrityDigest     string `json:"integrity_digest"`
-	IdempotencyContract string `json:"idempotency_contract,omitempty"`
-	IdempotencyKey      string `json:"idempotency_key,omitempty"`
+	ConfigurationDigest string `json:"configuration_digest,omitempty"`
 }
 type ResultRow struct {
 	EventID         string            `json:"event_id"`
