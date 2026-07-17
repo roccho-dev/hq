@@ -274,3 +274,20 @@ func priorStartedProvider(results []ResultRow, runID string) *ProviderEvidence {
 	}
 	return selected
 }
+func reconcileResult(runID string, i Instruction, seq int, at time.Time, message string) ResultRow {
+	return blockedResult(runID, i, seq, at, "reconcile_required", message, false)
+}
+func blockedResult(runID string, i Instruction, seq int, at time.Time, code, message string, retryable bool) ResultRow {
+	return ResultRow{EventID: makeEventID(runID, seq), Version: ResultVersionV1, RunID: runID, InstructionID: i.ID, Target: i.Target, Kind: ResultBlocked, Seq: seq, RecordedAt: at, Error: &ResultError{Code: code, Message: message, Retryable: &retryable}}
+}
+func newMonotonicClock(now func() time.Time) func() time.Time {
+	var last time.Time
+	return func() time.Time {
+		current := now().UTC()
+		if !last.IsZero() && !current.After(last) {
+			current = last.Add(time.Nanosecond)
+		}
+		last = current
+		return current
+	}
+}
