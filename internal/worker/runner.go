@@ -241,12 +241,25 @@ func matchingPolicyRecorded(policies []workersafety.PolicyDecision, decision wor
 	return false
 }
 
-func providerEvidence(d adapter.ProviderDescriptor, key string) *ProviderEvidence {
-	return &ProviderEvidence{CapabilityID: d.CapabilityID, ProviderID: d.ProviderID, ContractVersion: d.ContractVersion, DeploymentID: d.DeploymentID, ProviderKind: d.ProviderKind, IntegrityDigest: d.IntegrityDigest, IdempotencyContract: d.IdempotencyContract, IdempotencyKey: key}
+func providerEvidence(descriptor adapter.ProviderDescriptor, key string) *ProviderEvidence {
+	dependencies := make([]ProviderDependencyEvidence, 0, len(descriptor.Dependencies))
+	for _, dependency := range descriptor.Dependencies {
+		dependencies = append(dependencies, ProviderDependencyEvidence{
+			Name: dependency.Name, ProviderID: dependency.ProviderID, ContractVersion: dependency.ContractVersion,
+			DeploymentID: dependency.DeploymentID, ProviderKind: dependency.ProviderKind,
+			IntegrityDigest: dependency.IntegrityDigest, ConfigurationDigest: dependency.ConfigurationDigest,
+		})
+	}
+	return &ProviderEvidence{
+		CapabilityID: descriptor.CapabilityID, ProviderID: descriptor.ProviderID, ContractVersion: descriptor.ContractVersion,
+		DeploymentID: descriptor.DeploymentID, ProviderKind: descriptor.ProviderKind, IntegrityDigest: descriptor.IntegrityDigest,
+		ConfigurationDigest: descriptor.ConfigurationDigest, Dependencies: dependencies,
+		IdempotencyContract: descriptor.IdempotencyContract, IdempotencyKey: key,
+	}
 }
-func providerMatches(p ProviderEvidence, d adapter.ProviderDescriptor) bool {
-	c := ProviderEvidence{CapabilityID: d.CapabilityID, ProviderID: d.ProviderID, ContractVersion: d.ContractVersion, DeploymentID: d.DeploymentID, ProviderKind: d.ProviderKind, IntegrityDigest: d.IntegrityDigest, IdempotencyContract: d.IdempotencyContract}
-	return p.SameProvider(c) && p.IdempotencyContract != "" && p.IdempotencyKey != ""
+func providerMatches(prior ProviderEvidence, descriptor adapter.ProviderDescriptor) bool {
+	current := providerEvidence(descriptor, "")
+	return prior.SameProvider(*current) && prior.IdempotencyContract != "" && prior.IdempotencyKey != ""
 }
 func priorStartedProvider(results []ResultRow, runID string) *ProviderEvidence {
 	var selected *ProviderEvidence
@@ -254,26 +267,10 @@ func priorStartedProvider(results []ResultRow, runID string) *ProviderEvidence {
 	for _, row := range results {
 		if row.RunID == runID && row.Kind == ResultStarted && row.Provider != nil && row.Seq > best {
 			copy := *row.Provider
+			copy.Dependencies = append([]ProviderDependencyEvidence(nil), row.Provider.Dependencies...)
 			selected = &copy
 			best = row.Seq
 		}
 	}
 	return selected
-}
-func reconcileResult(runID string, i Instruction, seq int, at time.Time, message string) ResultRow {
-	return blockedResult(runID, i, seq, at, "reconcile_required", message, false)
-}
-func blockedResult(runID string, i Instruction, seq int, at time.Time, code, message string, retryable bool) ResultRow {
-	return ResultRow{EventID: makeEventID(runID, seq), Version: ResultVersionV1, RunID: runID, InstructionID: i.ID, Target: i.Target, Kind: ResultBlocked, Seq: seq, RecordedAt: at, Error: &ResultError{Code: code, Message: message, Retryable: &retryable}}
-}
-func newMonotonicClock(now func() time.Time) func() time.Time {
-	var last time.Time
-	return func() time.Time {
-		current := now().UTC()
-		if !last.IsZero() && !current.After(last) {
-			current = last.Add(time.Nanosecond)
-		}
-		last = current
-		return current
-	}
 }
