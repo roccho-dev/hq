@@ -14,6 +14,7 @@ import (
 )
 
 const VerifiedBindingsSchema = "envctl.verified-executable-bindings.v1"
+const bindingEnvironmentDigestDomain = "envctl.verifiedExecutableBinding.environment.v1\x00"
 
 type VerifiedBindings struct {
 	Schema  string            `json:"schema"`
@@ -21,14 +22,21 @@ type VerifiedBindings struct {
 }
 
 type VerifiedBinding struct {
-	BindingRef         string `json:"bindingRef"`
-	ResourceID         string `json:"resourceId"`
-	ContractVersion    string `json:"contractVersion"`
-	Executable         string `json:"executable"`
-	MaterialDigest     string `json:"materialDigest"`
-	DeploymentID       string `json:"deploymentId"`
-	DeclarationEventID string `json:"declarationEventId"`
-	SelectionEventID   string `json:"selectionEventId"`
+	BindingRef          string                       `json:"bindingRef"`
+	ResourceID          string                       `json:"resourceId"`
+	ContractVersion     string                       `json:"contractVersion"`
+	Executable          string                       `json:"executable"`
+	MaterialDigest      string                       `json:"materialDigest"`
+	Environment         []VerifiedBindingEnvironment `json:"environment,omitempty"`
+	ConfigurationDigest string                       `json:"configurationDigest,omitempty"`
+	DeploymentID        string                       `json:"deploymentId"`
+	DeclarationEventID  string                       `json:"declarationEventId"`
+	SelectionEventID    string                       `json:"selectionEventId"`
+}
+
+type VerifiedBindingEnvironment struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
 }
 
 func LoadVerifiedBinding(path, bindingRef, contractVersion string) (VerifiedBinding, error) {
@@ -67,6 +75,7 @@ func LoadVerifiedBinding(path, bindingRef, contractVersion string) (VerifiedBind
 		}
 		if entry.BindingRef == bindingRef {
 			copy := entry
+			copy.Environment = append([]VerifiedBindingEnvironment(nil), entry.Environment...)
 			selected = &copy
 		}
 	}
@@ -125,7 +134,91 @@ func (b VerifiedBinding) validate() error {
 	if !strings.HasPrefix(b.DeploymentID, b.ResourceID+"@") || !strings.HasSuffix(b.DeploymentID, ":"+b.MaterialDigest) {
 		return errors.New("deploymentId must bind resourceId and materialDigest")
 	}
+	if err := b.validateEnvironment(); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (b VerifiedBinding) validateEnvironment() error {
+	switch b.ContractVersion {
+	case "1":
+		if len(b.Environment) != 0 || b.ConfigurationDigest != "" {
+			return errors.New("binding contract 1 requires empty environment and configurationDigest")
+		}
+		return nil
+	case "2":
+		if len(b.Environment) == 0 {
+			return errors.New("binding contract 2 requires a finite environment")
+		}
+	default:
+		return fmt.Errorf("unsupported binding contract version %q", b.ContractVersion)
+	}
+	if len(b.Environment) > 64 {
+		return errors.New("binding environment exceeds 64 entries")
+	}
+	previous := ""
+	totalBytes := 0
+	for index, entry := range b.Environment {
+		if !validEnvironmentName(entry.Name) {
+			return fmt.Errorf("binding environment %d name is invalid", index+1)
+		}
+		if previous != "" && entry.Name <= previous {
+			return errors.New("binding environment names must be unique and sorted")
+		}
+		if strings.ContainsRune(entry.Value, '\x00') {
+			return fmt.Errorf("binding environment %q contains NUL", entry.Name)
+		}
+		previous = entry.Name
+		totalBytes += len(entry.Name) + len(entry.Value) + 2
+	}
+	if totalBytes > 64<<10 {
+		return errors.New("binding environment exceeds 64 KiB")
+	}
+	if err := validateConfigurationDigest(b.ConfigurationDigest); err != nil {
+		return err
+	}
+	expected := BindingEnvironmentDigest(b.Environment)
+	if b.ConfigurationDigest != expected {
+		return fmt.Errorf("configurationDigest does not match environment: expected %s, got %s", expected, b.ConfigurationDigest)
+	}
+	return nil
+}
+
+func validEnvironmentName(value string) bool {
+	if value == "" {
+		return false
+	}
+	for index, character := range value {
+		if character == '_' || character >= 'A' && character <= 'Z' || index > 0 && character >= '0' && character <= '9' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func BindingEnvironmentDigest(environment []VerifiedBindingEnvironment) string {
+	hash := sha256.New()
+	_, _ = hash.Write([]byte(bindingEnvironmentDigestDomain))
+	for _, entry := range environment {
+		_, _ = hash.Write([]byte(entry.Name))
+		_, _ = hash.Write([]byte{0})
+		_, _ = hash.Write([]byte(entry.Value))
+		_, _ = hash.Write([]byte{0})
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
+}
+
+func (b VerifiedBinding) EnvironmentStrings() []string {
+	if len(b.Environment) == 0 {
+		return []string{}
+	}
+	result := make([]string, 0, len(b.Environment))
+	for _, entry := range b.Environment {
+		result = append(result, entry.Name+"="+entry.Value)
+	}
+	return result
 }
 
 func (b VerifiedBinding) VerifyExecutable() error {
@@ -153,12 +246,26 @@ func (b VerifiedBinding) VerifyExecutable() error {
 }
 
 func validateDigest(value string) error {
+	if err := validateSHA256(value); err != nil {
+		return fmt.Errorf("materialDigest %w", err)
+	}
+	return nil
+}
+
+func validateConfigurationDigest(value string) error {
+	if err := validateSHA256(value); err != nil {
+		return fmt.Errorf("configurationDigest %w", err)
+	}
+	return nil
+}
+
+func validateSHA256(value string) error {
 	hexDigest := strings.TrimPrefix(value, "sha256:")
 	if !strings.HasPrefix(value, "sha256:") || len(hexDigest) != 64 || hexDigest != strings.ToLower(hexDigest) {
-		return errors.New("materialDigest must be sha256:<64 lowercase hex characters>")
+		return errors.New("must be sha256:<64 lowercase hex characters>")
 	}
 	if _, err := hex.DecodeString(hexDigest); err != nil {
-		return errors.New("materialDigest contains invalid hexadecimal data")
+		return errors.New("contains invalid hexadecimal data")
 	}
 	return nil
 }
