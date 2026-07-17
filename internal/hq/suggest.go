@@ -15,13 +15,14 @@ type TextEdit struct {
 }
 
 type CompileDraft struct {
-	Kind        string             `json:"kind"`
-	Queue       string             `json:"queue"`
-	Key         string             `json:"key,omitempty"`
-	Value       any                `json:"value,omitempty"`
-	Instruction map[string]any     `json:"instruction"`
-	Reason      string             `json:"reason,omitempty"`
-	Provenance  *CompileProvenance `json:"provenance,omitempty"`
+	Kind          string              `json:"kind"`
+	Queue         string              `json:"queue"`
+	Key           string              `json:"key,omitempty"`
+	Value         any                 `json:"value,omitempty"`
+	Instruction   map[string]any      `json:"instruction"`
+	Reason        string              `json:"reason,omitempty"`
+	Provenance    *CompileProvenance  `json:"provenance,omitempty"`
+	AcceptedInput *core.AcceptedInput `json:"accepted_input,omitempty"`
 }
 
 type Suggestion struct {
@@ -52,6 +53,10 @@ func CompleteWithWorldRecall(buffer string, cursor, documentVersion int, world *
 	}
 	if _, selected := world.SelectedRef(); !selected {
 		return nil
+	}
+	if buffer == "" && cursor == 0 {
+		results := recall.Recall(core.WorldRecallQuery{Scope: core.WorldRecallObjectQuery, RecentOnly: true})
+		return recallSuggestions(recall, results, 0, 0, "", documentVersion)
 	}
 	return complete(buffer, cursor, documentVersion, world, recall)
 }

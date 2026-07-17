@@ -32,6 +32,8 @@ type CommandField struct {
 	Default            *CommandValue  `json:"default,omitempty"`
 	Examples           []string       `json:"examples,omitempty"`
 	MaterializedValues []CommandValue `json:"materialized_values,omitempty"`
+	HistoryPolicy      string         `json:"history_policy,omitempty"`
+	Sensitive          bool           `json:"sensitive,omitempty"`
 	Bind               string         `json:"bind"`
 }
 
@@ -88,15 +90,15 @@ type CommandPreset struct {
 // CommandDefinition is an adapter-provided input-language declaration. Base
 // instruction fields and argument bindings are data, not compiler semantics.
 type CommandDefinition struct {
-	Kind           string         `json:"kind"`
-	CommandID      string         `json:"command_id,omitempty"`
-	CommandVersion string         `json:"command_version,omitempty"`
-	Name           string         `json:"name"`
-	Aliases        []string       `json:"aliases,omitempty"`
-	Keywords       []string       `json:"keywords,omitempty"`
-	Description    string         `json:"description,omitempty"`
-	Instruction    map[string]any `json:"instruction"`
-	Fields         []CommandField `json:"fields,omitempty"`
+	Kind           string          `json:"kind"`
+	CommandID      string          `json:"command_id,omitempty"`
+	CommandVersion string          `json:"command_version,omitempty"`
+	Name           string          `json:"name"`
+	Aliases        []string        `json:"aliases,omitempty"`
+	Keywords       []string        `json:"keywords,omitempty"`
+	Description    string          `json:"description,omitempty"`
+	Instruction    map[string]any  `json:"instruction"`
+	Fields         []CommandField  `json:"fields,omitempty"`
 	Presets        []CommandPreset `json:"presets,omitempty"`
 }
 

@@ -1,6 +1,7 @@
 package hq
 
 import (
+	"encoding/json"
 	"errors"
 
 	"hq/internal/core"
@@ -57,6 +58,34 @@ func CompileSelectedCommandObjectWithRange(text string, cursorLine int, world *J
 		World:     worldRef,
 		Command:   &commandRef,
 	}
+	definition, _ := world.Command(object.Name)
+	acceptedFields := make([]core.AcceptedInputField, 0, len(object.Values))
+	for _, field := range definition.Fields {
+		raw, supplied := object.Values[field.Name]
+		if !supplied || !core.HistoryPolicyPersists(field) {
+			continue
+		}
+		value, valueErr := commandValue(field, raw)
+		if valueErr != nil {
+			return CompileDraft{}, CommandObjectRange{}, valueErr
+		}
+		if field.Type == "integer" {
+			value = json.Number(raw)
+		}
+		acceptedFields = append(acceptedFields, core.AcceptedInputField{Name: field.Name, Type: field.Type, Value: value})
+	}
+	draft.AcceptedInput = &core.AcceptedInput{
+		Kind:               core.AcceptedInputKind,
+		World:              worldRef,
+		Command:            commandRef,
+		Fields:             acceptedFields,
+		SuppliedFieldCount: len(object.Values),
+		RecallComplete:     len(acceptedFields) == len(object.Values),
+		RenderContract:     core.CommandObjectMaterializerVersion,
+	}
+	if err := draft.AcceptedInput.ApplyAcceptedInputLimits(definition.Name); err != nil {
+		return CompileDraft{}, CommandObjectRange{}, err
+	}
 	return draft, objectRange, nil
 }
 
@@ -67,6 +96,7 @@ func BindFinalInstructionProvenance(draft *CompileDraft, world *JsonlWorld, inpu
 	worldRef, selected := world.SelectedRef()
 	if !selected {
 		draft.Provenance = nil
+		draft.AcceptedInput = nil
 		return nil
 	}
 	if draft.Provenance == nil {
@@ -83,5 +113,16 @@ func BindFinalInstructionProvenance(draft *CompileDraft, world *JsonlWorld, inpu
 		return err
 	}
 	draft.Provenance.InstructionDigest = digest
-	return draft.Provenance.Validate()
+	if err := draft.Provenance.Validate(); err != nil {
+		return err
+	}
+	if draft.AcceptedInput != nil {
+		if draft.Provenance.Command == nil || draft.AcceptedInput.World != draft.Provenance.World || draft.AcceptedInput.Command != *draft.Provenance.Command {
+			return errors.New("accepted input does not match compile provenance")
+		}
+		if err := draft.AcceptedInput.BindInstructionDigest(digest); err != nil {
+			return err
+		}
+	}
+	return nil
 }

@@ -139,6 +139,26 @@ func (w *JsonlWorld) ValidateSelected() error {
 			return fmt.Errorf("duplicate command_id %q", command.CommandID)
 		}
 		seen[command.CommandID] = true
+		for _, field := range command.Fields {
+			if !ValidHistoryPolicy(field.HistoryPolicy) {
+				return fmt.Errorf("command %q field %q has unsupported history_policy %q", command.Name, field.Name, field.HistoryPolicy)
+			}
+			if field.Sensitive && EffectiveHistoryPolicy(field) != HistoryPolicyDeny {
+				return fmt.Errorf("command %q field %q sensitive fields require history_policy deny", command.Name, field.Name)
+			}
+			if field.Sensitive && (field.Default != nil || len(field.Examples) != 0 || len(field.MaterializedValues) != 0) {
+				return fmt.Errorf("command %q field %q sensitive fields must not declare value-bearing recall vocabulary", command.Name, field.Name)
+			}
+		}
+		for _, preset := range command.Presets {
+			for name := range preset.Values {
+				for _, field := range command.Fields {
+					if field.Name == name && field.Sensitive {
+						return fmt.Errorf("command %q preset %q must not contain sensitive field %q", command.Name, preset.ID, name)
+					}
+				}
+			}
+		}
 	}
 	return nil
 }

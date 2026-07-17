@@ -161,6 +161,9 @@ func IsMutableWorldRecall(buffer string, cursor int, world *JsonlWorld) bool {
 	if _, selected := world.SelectedRef(); !selected {
 		return false
 	}
+	if buffer == "" && cursor == 0 {
+		return true
+	}
 	lines := documentLines(buffer)
 	lineIndex, localCursor := lineAtOffset(lines, cursor)
 	line := lines[lineIndex]
@@ -233,18 +236,39 @@ func recallCurrentToken(input string) string {
 
 func recallSortText(rank core.WorldRecallRank, candidateID string) string {
 	values := []struct {
-		value      int
+		value      int64
 		descending bool
 	}{
-		{rank.ScopeCompatibility, false}, {rank.WorstClass, false},
-		{rank.ExactCount, true}, {rank.PrefixCount, true},
-		{rank.SubstringCount, true}, {rank.DirectCount, true},
-		{rank.SubsequenceScore, true}, {rank.RequiredPreference, true},
-		{rank.CandidateKind, false},
+		{int64(rank.ScopeCompatibility), false}, {int64(rank.WorstClass), false},
+		{int64(rank.ExactCount), true}, {int64(rank.PrefixCount), true},
+		{int64(rank.SubstringCount), true}, {int64(rank.DirectCount), true},
+		{int64(rank.SubsequenceScore), true}, {int64(rank.RequiredPreference), true},
+	}
+	if rank.HistoryAware {
+		values = append(values, struct {
+			value      int64
+			descending bool
+		}{int64(rank.SourcePreference), false})
+	}
+	values = append(values, struct {
+		value      int64
+		descending bool
+	}{int64(rank.CandidateKind), false})
+	if rank.HistoryAware {
+		values = append(values,
+			struct {
+				value      int64
+				descending bool
+			}{rank.HistoryRecency, true},
+			struct {
+				value      int64
+				descending bool
+			}{int64(rank.HistoryFrequency), true},
+		)
 	}
 	parts := make([]string, len(values))
 	for index, value := range values {
-		encoded := uint64(int64(value.value)) ^ (uint64(1) << 63)
+		encoded := uint64(value.value) ^ (uint64(1) << 63)
 		if value.descending {
 			encoded = ^encoded
 		}

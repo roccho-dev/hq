@@ -70,7 +70,11 @@ type WorldRecallRank struct {
 	DirectCount        int
 	SubsequenceScore   int
 	RequiredPreference int
+	SourcePreference   int
 	CandidateKind      int
+	HistoryRecency     int64
+	HistoryFrequency   int
+	HistoryAware       bool
 }
 
 type WorldRecallQuery struct {
@@ -79,6 +83,7 @@ type WorldRecallQuery struct {
 	CommandName   string
 	FieldName     string
 	PresentFields map[string]bool
+	RecentOnly    bool
 }
 
 type WorldRecallResult struct {
@@ -120,28 +125,34 @@ type recallTerm struct {
 }
 
 type recallCandidate struct {
-	CandidateID     string
-	World           WorldRef
-	Command         CommandRef
-	StructuralRefs  []WorldRecallStructuralRef
-	Scope           WorldRecallScope
-	Kind            WorldRecallKind
-	CommandName     string
-	FieldName       string
-	Label           string
-	Detail          string
-	Description     string
-	Materialization string
-	Required        bool
-	Terms           []recallTerm
+	CandidateID      string
+	World            WorldRef
+	Command          CommandRef
+	StructuralRefs   []WorldRecallStructuralRef
+	IdentityRefs     []WorldRecallStructuralRef
+	Scope            WorldRecallScope
+	Kind             WorldRecallKind
+	CommandName      string
+	FieldName        string
+	Label            string
+	Detail           string
+	Description      string
+	Materialization  string
+	Required         bool
+	Terms            []recallTerm
+	SourcePreference int
+	HistoryRecency   int64
+	HistoryFrequency int
+	HistoryRecent    bool
 }
 
-// WorldRecallIndex is immutable after successful preparation and contains
-// only a projection of the selected semantic world.
+// WorldRecallIndex is immutable after successful preparation and contains a
+// projection of the selected semantic world plus optional in-memory history.
 type WorldRecallIndex struct {
 	id         string
 	world      WorldRef
 	candidates []recallCandidate
+	history    bool
 }
 
 func (index *WorldRecallIndex) ID() string {
@@ -229,32 +240,45 @@ func PrepareWorldRecall(world *JsonlWorld, identify WorldRecallCandidateIdentifi
 			}
 		}
 	}
-	seen := make(map[string]struct{}, len(index.candidates))
-	for candidateIndex := range index.candidates {
-		candidate := &index.candidates[candidateIndex]
-		prepareRecallTerms(candidate)
-		candidate.StructuralRefs = recallStructuralRefs(candidate.Terms)
-		candidate.CandidateID, err = identify(WorldRecallCandidateIdentity{
-			Kind: WorldRecallCandidateIDKind, CandidateKind: candidate.Kind,
-			World: candidate.World, Command: candidate.Command,
-			StructuralRefs:  append([]WorldRecallStructuralRef(nil), candidate.StructuralRefs...),
-			Materialization: candidate.Materialization,
-		})
-		if err != nil || !ValidDigest(candidate.CandidateID) {
-			if err == nil {
-				err = errors.New("invalid canonical digest")
-			}
-			return nil, fmt.Errorf("world recall candidate identity: %w", err)
-		}
-		if _, duplicate := seen[candidate.CandidateID]; duplicate {
-			return nil, fmt.Errorf("duplicate world recall candidate identity %q", candidate.CandidateID)
-		}
-		seen[candidate.CandidateID] = struct{}{}
+	if err := prepareRecallCandidates(index.candidates, identify); err != nil {
+		return nil, err
 	}
 	sort.Slice(index.candidates, func(i, j int) bool {
 		return index.candidates[i].CandidateID < index.candidates[j].CandidateID
 	})
 	return index, nil
+}
+
+func prepareRecallCandidates(candidates []recallCandidate, identify WorldRecallCandidateIdentifier) error {
+	seen := make(map[string]struct{}, len(candidates))
+	for candidateIndex := range candidates {
+		candidate := &candidates[candidateIndex]
+		prepareRecallTerms(candidate)
+		candidate.IdentityRefs = recallStructuralRefs(candidate.Terms)
+		if len(candidate.StructuralRefs) == 0 {
+			candidate.StructuralRefs = append([]WorldRecallStructuralRef(nil), candidate.IdentityRefs...)
+		} else {
+			candidate.StructuralRefs = mergeRecallRefs(candidate.IdentityRefs, candidate.StructuralRefs)
+		}
+		candidateID, err := identify(WorldRecallCandidateIdentity{
+			Kind: WorldRecallCandidateIDKind, CandidateKind: candidate.Kind,
+			World: candidate.World, Command: candidate.Command,
+			StructuralRefs:  append([]WorldRecallStructuralRef(nil), candidate.IdentityRefs...),
+			Materialization: candidate.Materialization,
+		})
+		if err != nil || !ValidDigest(candidateID) {
+			if err == nil {
+				err = errors.New("invalid canonical digest")
+			}
+			return fmt.Errorf("world recall candidate identity: %w", err)
+		}
+		candidate.CandidateID = candidateID
+		if _, duplicate := seen[candidate.CandidateID]; duplicate {
+			return fmt.Errorf("duplicate world recall candidate identity %q", candidate.CandidateID)
+		}
+		seen[candidate.CandidateID] = struct{}{}
+	}
+	return nil
 }
 
 func (index *WorldRecallIndex) Recall(query WorldRecallQuery) []WorldRecallResult {
@@ -264,6 +288,9 @@ func (index *WorldRecallIndex) Recall(query WorldRecallQuery) []WorldRecallResul
 	tokens := normalizeRecallQuery(query.Text)
 	results := make([]WorldRecallResult, 0)
 	for _, candidate := range index.candidates {
+		if query.RecentOnly && !candidate.HistoryRecent {
+			continue
+		}
 		if candidate.Scope != query.Scope || (query.CommandName != "" && candidate.CommandName != query.CommandName) || (query.FieldName != "" && candidate.FieldName != query.FieldName) {
 			continue
 		}
@@ -274,7 +301,7 @@ func (index *WorldRecallIndex) Recall(query WorldRecallQuery) []WorldRecallResul
 		if !ok {
 			continue
 		}
-		rank := recallRank(candidate, matches)
+		rank := recallRank(candidate, matches, index.history)
 		results = append(results, WorldRecallResult{
 			CandidateID: candidate.CandidateID, World: candidate.World, Command: candidate.Command,
 			StructuralRefs: append([]WorldRecallStructuralRef(nil), candidate.StructuralRefs...),
@@ -285,6 +312,15 @@ func (index *WorldRecallIndex) Recall(query WorldRecallQuery) []WorldRecallResul
 		})
 	}
 	sort.Slice(results, func(i, j int) bool { return lessRecallResult(results[i], results[j]) })
+	limit := 0
+	if query.RecentOnly {
+		limit = MaxRecentHistoryPresets
+	} else if index.history {
+		limit = MaxCombinedRecallResults
+	}
+	if limit > 0 && len(results) > limit {
+		results = results[:limit]
+	}
 	return results
 }
 
@@ -360,11 +396,13 @@ func prepareRecallTerms(candidate *recallCandidate) {
 func recallStructuralRefs(terms []recallTerm) []WorldRecallStructuralRef {
 	refs := make([]WorldRecallStructuralRef, 0, len(terms))
 	for _, term := range terms {
-		ref := WorldRecallStructuralRef{TermKind: term.Kind, TermPath: term.Path}
-		if len(refs) == 0 || refs[len(refs)-1] != ref {
-			refs = append(refs, ref)
-		}
+		refs = append(refs, WorldRecallStructuralRef{TermKind: term.Kind, TermPath: term.Path})
 	}
+	return mergeRecallRefs(nil, refs)
+}
+
+func mergeRecallRefs(left, right []WorldRecallStructuralRef) []WorldRecallStructuralRef {
+	refs := append(append([]WorldRecallStructuralRef(nil), left...), right...)
 	sort.Slice(refs, func(i, j int) bool {
 		if refs[i].TermKind != refs[j].TermKind {
 			return refs[i].TermKind < refs[j].TermKind
@@ -461,8 +499,15 @@ func lessRecallMatch(left, right WorldRecallMatch) bool {
 	return left.TermPath < right.TermPath
 }
 
-func recallRank(candidate recallCandidate, matches []WorldRecallMatch) WorldRecallRank {
-	rank := WorldRecallRank{ScopeCompatibility: 0, CandidateKind: recallCandidateKindOrder(candidate.Kind)}
+func recallRank(candidate recallCandidate, matches []WorldRecallMatch, historyAware bool) WorldRecallRank {
+	rank := WorldRecallRank{
+		ScopeCompatibility: 0,
+		SourcePreference:   candidate.SourcePreference,
+		CandidateKind:      recallCandidateKindOrder(candidate.Kind),
+		HistoryRecency:     candidate.HistoryRecency,
+		HistoryFrequency:   candidate.HistoryFrequency,
+		HistoryAware:       historyAware,
+	}
 	if len(matches) > 0 {
 		rank.WorstClass = -1
 	}
@@ -517,8 +562,17 @@ func lessRecallResult(left, right WorldRecallResult) bool {
 	if a.RequiredPreference != b.RequiredPreference {
 		return a.RequiredPreference > b.RequiredPreference
 	}
+	if a.HistoryAware && b.HistoryAware && a.SourcePreference != b.SourcePreference {
+		return a.SourcePreference < b.SourcePreference
+	}
 	if a.CandidateKind != b.CandidateKind {
 		return a.CandidateKind < b.CandidateKind
+	}
+	if a.HistoryAware && b.HistoryAware && a.HistoryRecency != b.HistoryRecency {
+		return a.HistoryRecency > b.HistoryRecency
+	}
+	if a.HistoryAware && b.HistoryAware && a.HistoryFrequency != b.HistoryFrequency {
+		return a.HistoryFrequency > b.HistoryFrequency
 	}
 	return left.CandidateID < right.CandidateID
 }
@@ -536,7 +590,14 @@ func recallDocumentation(candidate recallCandidate, matches []WorldRecallMatch) 
 		}
 		parts = append(parts, "Matches:\n"+strings.Join(reasons, "\n"))
 	}
-	return strings.Join(parts, "\n\n")
+	documentation := strings.Join(parts, "\n\n")
+	if candidate.SourcePreference > 0 && len(documentation) > MaxHistoryDocumentationBytes {
+		documentation = documentation[:MaxHistoryDocumentationBytes]
+		for !utf8.ValidString(documentation) {
+			documentation = documentation[:len(documentation)-1]
+		}
+	}
+	return documentation
 }
 
 func recallCommandTerms(command CommandDefinition) []recallTerm {
@@ -728,7 +789,22 @@ func recallDescriptionKind(kind string) bool {
 }
 
 func recallTermKindOrder(kind string) int {
-	order := map[string]int{"command.name": 0, "command.alias": 1, "command.keyword": 2, "field.name": 3, "field.enum": 4, "field.default": 5, "field.example": 6, "field.materialized": 7, "preset.label": 8, "preset.value": 9, "command.description": 10, "field.description": 11}
+	order := map[string]int{
+		"command.name":       0,
+		"command.alias":      1,
+		"command.keyword":    2,
+		"field.name":         3,
+		"field.enum":         4,
+		"field.default":      5,
+		"field.example":      6,
+		"field.materialized": 7,
+		"preset.label":       8,
+		"preset.value":       9,
+		"history.search":     10,
+		"history.field_value": 11,
+		"command.description":  12,
+		"field.description":    13,
+	}
 	if value, ok := order[kind]; ok {
 		return value
 	}

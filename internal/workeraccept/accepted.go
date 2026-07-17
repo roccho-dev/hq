@@ -22,19 +22,21 @@ const (
 )
 
 type envelope struct {
-	Kind        string                  `json:"kind"`
-	Queue       string                  `json:"queue"`
-	Key         string                  `json:"key,omitempty"`
-	Value       json.RawMessage         `json:"value,omitempty"`
-	Instruction json.RawMessage         `json:"instruction"`
-	Reason      string                  `json:"reason,omitempty"`
-	Provenance  *core.CompileProvenance `json:"provenance,omitempty"`
+	Kind          string                  `json:"kind"`
+	Queue         string                  `json:"queue"`
+	Key           string                  `json:"key,omitempty"`
+	Value         json.RawMessage         `json:"value,omitempty"`
+	Instruction   json.RawMessage         `json:"instruction"`
+	Reason        string                  `json:"reason,omitempty"`
+	Provenance    *core.CompileProvenance `json:"provenance,omitempty"`
+	AcceptedInput json.RawMessage         `json:"accepted_input,omitempty"`
 }
 
 // Read converts every non-empty accepted.instruction JSONL row into one
 // worker.ReadRow. Per-line envelope failures are represented as ParseError so
 // the normal worker path persists canonical validation.v1 evidence and
-// continues with later rows.
+// continues with later rows. accepted_input is deliberately discarded before
+// worker meaning is constructed.
 func Read(path string, r io.Reader) ([]worker.ReadRow, error) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 64*1024), maxLineBytes)
