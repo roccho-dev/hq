@@ -97,15 +97,15 @@ func (d ProviderDescriptor) Validate() error {
 	if err := validateOptionalDigest(d.ConfigurationDigest); err != nil {
 		return fmt.Errorf("configuration_digest %w", err)
 	}
-	previous := ""
+	seenDependencies := map[string]struct{}{}
 	for index, dependency := range d.Dependencies {
 		if err := dependency.Validate(); err != nil {
 			return fmt.Errorf("dependency %d: %w", index+1, err)
 		}
-		if previous != "" && dependency.Name <= previous {
-			return errors.New("provider dependency names must be unique and sorted")
+		if _, duplicate := seenDependencies[dependency.Name]; duplicate {
+			return fmt.Errorf("duplicate provider dependency name %q", dependency.Name)
 		}
-		previous = dependency.Name
+		seenDependencies[dependency.Name] = struct{}{}
 	}
 	return nil
 }
