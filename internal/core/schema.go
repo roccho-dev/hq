@@ -113,8 +113,17 @@ type LocalToolDefinition struct {
 	ToolVersion            string               `json:"tool_version"`
 	BindingRef             string               `json:"binding_ref"`
 	BindingContractVersion string               `json:"binding_contract_version"`
+	Bindings               []LocalToolBinding   `json:"bindings,omitempty"`
 	Invocation             *LocalToolInvocation `json:"invocation,omitempty"`
 	Actions                []LocalToolAction    `json:"actions,omitempty"`
+}
+
+// LocalToolBinding is one named, exact, one-level executable dependency. It is
+// world meaning only: the selected profile still owns the concrete executable.
+type LocalToolBinding struct {
+	Name                   string `json:"name"`
+	BindingRef             string `json:"binding_ref"`
+	BindingContractVersion string `json:"binding_contract_version"`
 }
 
 // LocalToolInvocation is a selected resource contract, not a command wrapper.
@@ -149,12 +158,12 @@ type LocalToolInput struct {
 	Enum     []string `json:"enum,omitempty"`
 }
 
-// LocalToolArg is a strict tagged union: exactly one of Literal or Field must
-// be present. Pointers distinguish an absent member from an explicitly empty
-// value, which validation rejects independently.
+// LocalToolArg is a strict tagged union. Literal and Field are the original
+// finite forms; BindingExecutable inserts one declared verified executable.
 type LocalToolArg struct {
-	Literal *string `json:"literal,omitempty"`
-	Field   *string `json:"field,omitempty"`
+	Literal           *string `json:"literal,omitempty"`
+	Field             *string `json:"field,omitempty"`
+	BindingExecutable *string `json:"binding_executable,omitempty"`
 }
 
 type LocalToolStdin struct {
