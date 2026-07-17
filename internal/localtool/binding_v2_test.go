@@ -12,7 +12,7 @@ func TestBindingContractV2UsesOnlyVerifiedOrderedEnvironment(t *testing.T) {
 	t.Setenv("HQ_LOCAL_TOOL_POISON", "ambient-must-not-win")
 	executable, registryPath := executableBindingFixture(t, "local-tool.dummy", "1", "app.dummy")
 	environment := []VerifiedBindingEnvironment{{Name: "HQ_LOCAL_TOOL_POISON", Value: "binding-owned"}}
-	binding := verifiedBindingForTest(executable, "local-tool.dummy", "app.dummy", "2")
+	binding := verifiedBindingForTest(t, executable, "local-tool.dummy", "app.dummy", "2")
 	binding.Environment = environment
 	binding.ConfigurationDigest = BindingEnvironmentDigest(environment)
 	writeRegistry(t, registryPath, VerifiedBindings{Schema: VerifiedBindingsSchema, Entries: []VerifiedBinding{binding}})
@@ -42,7 +42,7 @@ func TestBindingContractV2UsesOnlyVerifiedOrderedEnvironment(t *testing.T) {
 func TestBindingConfigurationDigestRejectsAllZeroAndMalformedEnvironment(t *testing.T) {
 	executable, registryPath := executableBindingFixture(t, "local-tool.dummy", "1", "app.dummy")
 	validEnvironment := []VerifiedBindingEnvironment{{Name: "APPDATA", Value: "/exact/profile"}}
-	valid := verifiedBindingForTest(executable, "local-tool.dummy", "app.dummy", "2")
+	valid := verifiedBindingForTest(t, executable, "local-tool.dummy", "app.dummy", "2")
 	valid.Environment = validEnvironment
 	valid.ConfigurationDigest = BindingEnvironmentDigest(validEnvironment)
 
@@ -97,21 +97,12 @@ func TestBindingContractV1RemainsEmptyAndCompatible(t *testing.T) {
 	}
 }
 
-func verifiedBindingForTest(executable, bindingRef, resourceID, contractVersion string) VerifiedBinding {
-	digest := fileDigestForTest(executable)
+func verifiedBindingForTest(t *testing.T, executable, bindingRef, resourceID, contractVersion string) VerifiedBinding {
+	t.Helper()
+	digest := sha256File(t, executable)
 	return VerifiedBinding{
 		BindingRef: bindingRef, ResourceID: resourceID, ContractVersion: contractVersion, Executable: executable,
 		MaterialDigest: digest, DeploymentID: resourceID + "@1:" + digest,
 		DeclarationEventID: bindingRef + "-declared", SelectionEventID: bindingRef + "-selected",
 	}
-}
-
-func fileDigestForTest(path string) string {
-	// sha256File requires a testing.T only for fatal handling. This helper is
-	// used after executableBindingFixture has already proved the path readable.
-	data, err := osReadFile(path)
-	if err != nil {
-		panic(err)
-	}
-	return digestBytes(data)
 }
