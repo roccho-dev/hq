@@ -58,6 +58,7 @@ func (p Preparer) Prepare(_ context.Context, request adapter.Request) (adapter.P
 
 	var action core.LocalToolAction
 	var plan executionPlan
+	var dependencies []resolvedDependency
 	var capabilityID string
 	if finite {
 		if value.ActionID == "" || value.Input == nil {
@@ -67,8 +68,13 @@ func (p Preparer) Prepare(_ context.Context, request adapter.Request) (adapter.P
 		if !ok {
 			return adapter.Prepared{}, blocked("local_tool_action_unknown", fmt.Sprintf("local tool action %q is unavailable", value.ActionID))
 		}
+		var dependencyPaths map[string]string
 		var err error
-		plan, err = buildPlan(action, value.Input)
+		dependencies, dependencyPaths, err = resolveActionDependencies(tool, action, p.BindingsPath)
+		if err != nil {
+			return adapter.Prepared{}, err
+		}
+		plan, err = buildPlan(action, value.Input, dependencyPaths)
 		if err != nil {
 			return adapter.Prepared{}, err
 		}
@@ -97,17 +103,17 @@ func (p Preparer) Prepare(_ context.Context, request adapter.Request) (adapter.P
 		return adapter.Prepared{}, err
 	}
 	descriptor := adapter.ProviderDescriptor{
-		CapabilityID:    capabilityID,
-		ProviderID:      binding.BindingRef,
-		ContractVersion: binding.ContractVersion,
-		DeploymentID:    binding.DeploymentID,
-		ProviderKind:    "executable",
-		IntegrityDigest: binding.MaterialDigest,
+		CapabilityID: capabilityID, ProviderID: binding.BindingRef, ContractVersion: binding.ContractVersion,
+		DeploymentID: binding.DeploymentID, ProviderKind: "executable", IntegrityDigest: binding.MaterialDigest,
+		ConfigurationDigest: binding.ConfigurationDigest, Dependencies: dependencyDescriptors(dependencies),
 	}
 	if err := descriptor.Validate(); err != nil {
 		return adapter.Prepared{}, blocked("local_tool_provider_invalid", err.Error())
 	}
-	return adapter.Prepared{Adapter: &preparedAdapter{binding: binding, action: action, plan: plan}, Provider: &descriptor}, nil
+	return adapter.Prepared{
+		Adapter:  &preparedAdapter{binding: binding, dependencies: dependencies, action: action, plan: plan},
+		Provider: &descriptor,
+	}, nil
 }
 
 func invocationAction(invocation core.LocalToolInvocation) core.LocalToolAction {
@@ -122,12 +128,63 @@ func invocationAction(invocation core.LocalToolInvocation) core.LocalToolAction 
 	}
 }
 
+type resolvedDependency struct {
+	name    string
+	binding VerifiedBinding
+}
+
+func resolveActionDependencies(tool core.LocalToolDefinition, action core.LocalToolAction, bindingsPath string) ([]resolvedDependency, map[string]string, error) {
+	referenced := map[string]bool{}
+	for _, argument := range action.Argv {
+		if argument.BindingExecutable != nil {
+			referenced[*argument.BindingExecutable] = true
+		}
+	}
+	if len(referenced) == 0 {
+		return nil, map[string]string{}, nil
+	}
+	resolved := make([]resolvedDependency, 0, len(referenced))
+	paths := make(map[string]string, len(referenced))
+	for _, declaration := range tool.Bindings {
+		if !referenced[declaration.Name] {
+			continue
+		}
+		binding, err := LoadVerifiedBinding(bindingsPath, declaration.BindingRef, declaration.BindingContractVersion)
+		if err != nil {
+			return nil, nil, err
+		}
+		resolved = append(resolved, resolvedDependency{name: declaration.Name, binding: binding})
+		paths[declaration.Name] = binding.Executable
+		delete(referenced, declaration.Name)
+	}
+	for name := range referenced {
+		return nil, nil, blocked("local_tool_dependency_unknown", fmt.Sprintf("binding executable dependency %q is not declared", name))
+	}
+	return resolved, paths, nil
+}
+
+func dependencyDescriptors(dependencies []resolvedDependency) []adapter.ProviderDependencyDescriptor {
+	if len(dependencies) == 0 {
+		return nil
+	}
+	result := make([]adapter.ProviderDependencyDescriptor, 0, len(dependencies))
+	for _, dependency := range dependencies {
+		binding := dependency.binding
+		result = append(result, adapter.ProviderDependencyDescriptor{
+			Name: dependency.name, ProviderID: binding.BindingRef, ContractVersion: binding.ContractVersion,
+			DeploymentID: binding.DeploymentID, ProviderKind: "executable", IntegrityDigest: binding.MaterialDigest,
+			ConfigurationDigest: binding.ConfigurationDigest,
+		})
+	}
+	return result
+}
+
 type executionPlan struct {
 	args  []string
 	stdin []byte
 }
 
-func buildPlan(action core.LocalToolAction, input map[string]json.RawMessage) (executionPlan, error) {
+func buildPlan(action core.LocalToolAction, input map[string]json.RawMessage, dependencyPaths map[string]string) (executionPlan, error) {
 	if input == nil {
 		return executionPlan{}, blocked("local_tool_input_invalid", "input must be an object")
 	}
@@ -155,6 +212,14 @@ func buildPlan(action core.LocalToolAction, input map[string]json.RawMessage) (e
 	}
 	args := make([]string, 0, len(action.Argv))
 	for _, template := range action.Argv {
+		if template.BindingExecutable != nil {
+			path, ok := dependencyPaths[*template.BindingExecutable]
+			if !ok {
+				return executionPlan{}, blocked("local_tool_dependency_unavailable", fmt.Sprintf("binding executable dependency %q is unavailable", *template.BindingExecutable))
+			}
+			args = append(args, path)
+			continue
+		}
 		if template.Literal != nil {
 			args = append(args, *template.Literal)
 			continue
@@ -214,21 +279,27 @@ func validateInputValue(definition core.LocalToolInput, raw json.RawMessage) (st
 }
 
 type preparedAdapter struct {
-	binding VerifiedBinding
-	action  core.LocalToolAction
-	plan    executionPlan
+	binding      VerifiedBinding
+	dependencies []resolvedDependency
+	action       core.LocalToolAction
+	plan         executionPlan
 }
 
 func (a *preparedAdapter) Run(ctx context.Context, request adapter.Request, emit adapter.Emit) (adapter.Completion, error) {
 	if err := a.binding.VerifyExecutable(); err != nil {
 		return adapter.Completion{}, err
 	}
+	for _, dependency := range a.dependencies {
+		if err := dependency.binding.VerifyExecutable(); err != nil {
+			return adapter.Completion{}, err
+		}
+	}
 	runCtx, cancel := context.WithTimeout(ctx, time.Duration(a.action.Limits.TimeoutMS)*time.Millisecond)
 	defer cancel()
 	result, runErr := (directexec.Runner{}).Run(runCtx, directexec.Command{
 		Path: a.binding.Executable, Args: append([]string(nil), a.plan.args...), Dir: request.CWD,
 		Stdin: append([]byte(nil), a.plan.stdin...), StdinLimit: int64(a.action.Stdin.MaxBytes),
-		StdoutLimit: int64(a.action.Limits.StdoutBytes), StderrLimit: int64(a.action.Limits.StderrBytes), Env: []string{},
+		StdoutLimit: int64(a.action.Limits.StdoutBytes), StderrLimit: int64(a.action.Limits.StderrBytes), Env: a.binding.EnvironmentStrings(),
 	})
 	var nativeSessionID *string
 	if runErr == nil {

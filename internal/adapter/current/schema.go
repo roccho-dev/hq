@@ -237,6 +237,10 @@ func validateLocalTool(tool core.LocalToolDefinition) error {
 			return fmt.Errorf("%s is invalid", field)
 		}
 	}
+	bindings, err := validateLocalToolBindings(tool)
+	if err != nil {
+		return err
+	}
 	if len(tool.Actions) == 0 && tool.Invocation == nil {
 		return errors.New("local tool requires at least one action or invocation policy")
 	}
@@ -250,7 +254,7 @@ func validateLocalTool(tool core.LocalToolDefinition) error {
 	}
 	seenActions := map[string]bool{}
 	for i, action := range tool.Actions {
-		if err := validateLocalToolAction(action); err != nil {
+		if err := validateLocalToolActionWithBindings(action, bindings); err != nil {
 			return fmt.Errorf("action %d: %w", i+1, err)
 		}
 		if seenActions[action.ActionID] {
@@ -262,6 +266,10 @@ func validateLocalTool(tool core.LocalToolDefinition) error {
 }
 
 func validateLocalToolAction(action core.LocalToolAction) error {
+	return validateLocalToolActionWithBindings(action, nil)
+}
+
+func validateLocalToolActionWithBindings(action core.LocalToolAction, bindings map[string]core.LocalToolBinding) error {
 	if !validLocalToolName(action.ActionID) {
 		return errors.New("action_id is invalid")
 	}
@@ -303,8 +311,15 @@ func validateLocalToolAction(action core.LocalToolAction) error {
 	for i, argument := range action.Argv {
 		hasLiteral := argument.Literal != nil
 		hasField := argument.Field != nil
-		if hasLiteral == hasField {
-			return fmt.Errorf("argv %d must declare exactly one of literal or field", i+1)
+		hasBinding := argument.BindingExecutable != nil
+		members := 0
+		for _, present := range []bool{hasLiteral, hasField, hasBinding} {
+			if present {
+				members++
+			}
+		}
+		if members != 1 {
+			return fmt.Errorf("argv %d must declare exactly one of literal, field, or binding_executable", i+1)
 		}
 		if hasLiteral && *argument.Literal == "" {
 			return fmt.Errorf("argv %d literal must not be empty", i+1)
@@ -316,6 +331,14 @@ func validateLocalToolAction(action core.LocalToolAction) error {
 			}
 			if !input.Required {
 				return fmt.Errorf("argv %d field %q must be required", i+1, *argument.Field)
+			}
+		}
+		if hasBinding {
+			if !validLocalToolName(*argument.BindingExecutable) {
+				return fmt.Errorf("argv %d binding_executable is invalid", i+1)
+			}
+			if _, ok := bindings[*argument.BindingExecutable]; !ok {
+				return fmt.Errorf("argv %d references unknown binding_executable %q", i+1, *argument.BindingExecutable)
 			}
 		}
 	}

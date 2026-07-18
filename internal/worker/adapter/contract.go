@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -66,25 +67,101 @@ func (r Request) Validate() error {
 }
 
 type ProviderDescriptor struct {
-	CapabilityID        string `json:"capability_id"`
+	CapabilityID        string                         `json:"capability_id"`
+	ProviderID          string                         `json:"provider_id"`
+	ContractVersion     string                         `json:"contract_version"`
+	DeploymentID        string                         `json:"deployment_id"`
+	ProviderKind        string                         `json:"provider_kind"`
+	IntegrityDigest     string                         `json:"integrity_digest"`
+	ConfigurationDigest string                         `json:"configuration_digest,omitempty"`
+	Dependencies        []ProviderDependencyDescriptor `json:"dependencies,omitempty"`
+	IdempotencyContract string                         `json:"idempotency_contract,omitempty"`
+}
+
+type ProviderDependencyDescriptor struct {
+	Name                string `json:"name"`
 	ProviderID          string `json:"provider_id"`
 	ContractVersion     string `json:"contract_version"`
 	DeploymentID        string `json:"deployment_id"`
 	ProviderKind        string `json:"provider_kind"`
 	IntegrityDigest     string `json:"integrity_digest"`
-	IdempotencyContract string `json:"idempotency_contract,omitempty"`
+	ConfigurationDigest string `json:"configuration_digest,omitempty"`
 }
 
 func (d ProviderDescriptor) Validate() error {
-	for f, v := range map[string]string{"capability_id": d.CapabilityID, "provider_id": d.ProviderID, "contract_version": d.ContractVersion, "deployment_id": d.DeploymentID, "provider_kind": d.ProviderKind, "integrity_digest": d.IntegrityDigest} {
-		if strings.TrimSpace(v) == "" {
-			return fmt.Errorf("%s is required", f)
+	for field, value := range map[string]string{"capability_id": d.CapabilityID, "provider_id": d.ProviderID, "contract_version": d.ContractVersion, "deployment_id": d.DeploymentID, "provider_kind": d.ProviderKind, "integrity_digest": d.IntegrityDigest} {
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("%s is required", field)
 		}
+	}
+	if err := validateOptionalDigest(d.ConfigurationDigest); err != nil {
+		return fmt.Errorf("configuration_digest %w", err)
+	}
+	seenDependencies := map[string]struct{}{}
+	for index, dependency := range d.Dependencies {
+		if err := dependency.Validate(); err != nil {
+			return fmt.Errorf("dependency %d: %w", index+1, err)
+		}
+		if _, duplicate := seenDependencies[dependency.Name]; duplicate {
+			return fmt.Errorf("duplicate provider dependency name %q", dependency.Name)
+		}
+		seenDependencies[dependency.Name] = struct{}{}
 	}
 	return nil
 }
-func (d ProviderDescriptor) Equal(o ProviderDescriptor) bool {
-	return d.CapabilityID == o.CapabilityID && d.ProviderID == o.ProviderID && d.ContractVersion == o.ContractVersion && d.DeploymentID == o.DeploymentID && d.ProviderKind == o.ProviderKind && d.IntegrityDigest == o.IntegrityDigest && d.IdempotencyContract == o.IdempotencyContract
+
+func (d ProviderDependencyDescriptor) Validate() error {
+	for field, value := range map[string]string{"name": d.Name, "provider_id": d.ProviderID, "contract_version": d.ContractVersion, "deployment_id": d.DeploymentID, "provider_kind": d.ProviderKind, "integrity_digest": d.IntegrityDigest} {
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("%s is required", field)
+		}
+	}
+	if !validDependencyName(d.Name) {
+		return errors.New("name is invalid")
+	}
+	if err := validateOptionalDigest(d.ConfigurationDigest); err != nil {
+		return fmt.Errorf("configuration_digest %w", err)
+	}
+	return nil
+}
+
+func (d ProviderDescriptor) Equal(other ProviderDescriptor) bool {
+	if d.CapabilityID != other.CapabilityID || d.ProviderID != other.ProviderID || d.ContractVersion != other.ContractVersion || d.DeploymentID != other.DeploymentID || d.ProviderKind != other.ProviderKind || d.IntegrityDigest != other.IntegrityDigest || d.ConfigurationDigest != other.ConfigurationDigest || d.IdempotencyContract != other.IdempotencyContract || len(d.Dependencies) != len(other.Dependencies) {
+		return false
+	}
+	for index := range d.Dependencies {
+		if d.Dependencies[index] != other.Dependencies[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func validDependencyName(value string) bool {
+	if value == "" || strings.TrimSpace(value) != value {
+		return false
+	}
+	for _, character := range value {
+		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || character == '.' || character == '_' || character == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func validateOptionalDigest(value string) error {
+	if value == "" {
+		return nil
+	}
+	hexDigest := strings.TrimPrefix(value, "sha256:")
+	if !strings.HasPrefix(value, "sha256:") || len(hexDigest) != 64 || hexDigest != strings.ToLower(hexDigest) {
+		return errors.New("must be sha256:<64 lowercase hex characters>")
+	}
+	if _, err := hex.DecodeString(hexDigest); err != nil {
+		return errors.New("contains invalid hexadecimal data")
+	}
+	return nil
 }
 
 type OutputKind string
