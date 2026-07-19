@@ -54,11 +54,18 @@ func CompleteWithWorldRecall(buffer string, cursor, documentVersion int, world *
 	if _, selected := world.SelectedRef(); !selected {
 		return nil
 	}
-	if buffer == "" && cursor == 0 {
+	if canonicalEmptyRecallDraft(buffer, cursor) {
 		results := recall.Recall(core.WorldRecallQuery{Scope: core.WorldRecallObjectQuery, RecentOnly: true})
 		return recallSuggestions(recall, results, 0, 0, "", documentVersion)
 	}
 	return complete(buffer, cursor, documentVersion, world, recall)
+}
+
+func canonicalEmptyRecallDraft(buffer string, cursor int) bool {
+	if cursor != 0 {
+		return false
+	}
+	return buffer == "" || buffer == "\n" || buffer == "\r\n"
 }
 
 func complete(buffer string, cursor, documentVersion int, world *JsonlWorld, recall *core.WorldRecallIndex) []Suggestion {
