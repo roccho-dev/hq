@@ -103,6 +103,7 @@ type runViewSelection struct {
 	ViewTool        core.LocalToolDefinition
 	OpenActionID    string
 	NativeSessionID string
+	ViewProvider    *worker.ProviderEvidence
 	Failure         *runViewFailure
 }
 
@@ -272,7 +273,11 @@ func selectRunView(runID string, environment runViewEnvironment) (runViewSelecti
 		return runViewSelection{}, fmt.Errorf("canonical instruction %q is unavailable", detail.Run.InstructionID)
 	}
 	selection.Instruction = instruction
-	selection.NativeSessionID = latestRunViewReference(detail.Events)
+	if viewEvidence := latestRunViewEvidence(detail.Events); viewEvidence != nil {
+		selection.NativeSessionID = viewEvidence.NativeSessionID
+		provider := viewEvidence.Provider
+		selection.ViewProvider = &provider
+	}
 	if instruction.Target != "local-tool" || instruction.Op != "run" {
 		return selection, nil
 	}
@@ -348,13 +353,14 @@ func localToolActionByID(tool core.LocalToolDefinition, actionID string) (core.L
 	return core.LocalToolAction{}, false
 }
 
-func latestRunViewReference(events []worker.ResultRow) string {
+func latestRunViewEvidence(events []worker.ResultRow) *worker.RunViewEvidence {
 	for index := len(events) - 1; index >= 0; index-- {
-		if events[index].View != nil && strings.TrimSpace(events[index].View.NativeSessionID) != "" {
-			return events[index].View.NativeSessionID
+		if events[index].View != nil {
+			view := *events[index].View
+			return &view
 		}
 	}
-	return ""
+	return nil
 }
 
 func runViewOperationActionID(openActionID, operation string) string {
@@ -409,7 +415,41 @@ func prepareRunViewOperation(ctx context.Context, preparer runViewPreparer, sele
 	if prepared.RunViewRequired {
 		return request, workeradapter.Prepared{}, &runViewFailure{Code: "view_contract_invalid", Message: "view operations cannot recursively require another view"}
 	}
+	if _, usesNativeReference := input["native_session_id"]; usesNativeReference {
+		if selection.ViewProvider == nil || !sameRunViewProvider(selection.ViewProvider, prepared.Provider) {
+			return request, workeradapter.Prepared{}, &runViewFailure{
+				Code: "view_reference_stale", Message: "the native view reference belongs to a different verified provider",
+			}
+		}
+	}
 	return request, prepared, nil
+}
+
+func sameRunViewProvider(canonical *worker.ProviderEvidence, current *workeradapter.ProviderDescriptor) bool {
+	if canonical == nil || current == nil ||
+		canonical.ProviderID != current.ProviderID ||
+		canonical.ContractVersion != current.ContractVersion ||
+		canonical.DeploymentID != current.DeploymentID ||
+		canonical.ProviderKind != current.ProviderKind ||
+		canonical.IntegrityDigest != current.IntegrityDigest ||
+		canonical.ConfigurationDigest != current.ConfigurationDigest ||
+		len(canonical.Dependencies) != len(current.Dependencies) {
+		return false
+	}
+	for index := range canonical.Dependencies {
+		left := canonical.Dependencies[index]
+		right := current.Dependencies[index]
+		if left.Name != right.Name ||
+			left.ProviderID != right.ProviderID ||
+			left.ContractVersion != right.ContractVersion ||
+			left.DeploymentID != right.DeploymentID ||
+			left.ProviderKind != right.ProviderKind ||
+			left.IntegrityDigest != right.IntegrityDigest ||
+			left.ConfigurationDigest != right.ConfigurationDigest {
+			return false
+		}
+	}
+	return true
 }
 
 func buildRunViewOperationInput(action core.LocalToolAction, selection runViewSelection, eventsPath string, maxBytes int, follow bool) (map[string]json.RawMessage, *runViewFailure) {

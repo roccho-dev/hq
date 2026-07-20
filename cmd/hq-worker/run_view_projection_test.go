@@ -342,6 +342,36 @@ func TestRunViewOperationReturnsTypedFailureWhenNativeHintIsRequired(t *testing.
 	}
 }
 
+func TestRunViewOperationRejectsNativeHintFromDifferentVerifiedProvider(t *testing.T) {
+	environment := runViewTestEnvironment("required", "view.open", true)
+	selection, err := selectRunView("run-1", environment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := workeradapter.ProviderDescriptor{
+		CapabilityID: "local-tool:view@1/view.focus", ProviderID: "local-tool.view", ContractVersion: "1",
+		DeploymentID: "view@1", ProviderKind: "executable", IntegrityDigest: "sha256:" + strings.Repeat("1", 64),
+	}
+	adapter := &recordingRunViewAdapter{completion: workeradapter.Completion{FinalText: "must not execute"}}
+	preparer := &recordingRunViewPreparer{prepared: workeradapter.Prepared{Adapter: adapter, Provider: &provider}}
+	var output bytes.Buffer
+	code := executeRunViewOperation(
+		context.Background(), &output, "focus", preparer, selection,
+		hqprofile.Profile{WorkspaceRoot: "/workspace", EventsPath: "/events/events.jsonl"}, 1024,
+	)
+	if code != 2 || len(preparer.requests) != 1 || len(adapter.requests) != 0 {
+		t.Fatalf("code=%d output=%q prepares=%d executes=%d", code, output.String(), len(preparer.requests), len(adapter.requests))
+	}
+	var receipt runViewOperationReceipt
+	if err := json.Unmarshal(bytes.TrimSpace(output.Bytes()), &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.Failure == nil || receipt.Failure.Code != "view_reference_stale" ||
+		!strings.Contains(receipt.Failure.Message, "different verified provider") {
+		t.Fatalf("receipt=%+v", receipt)
+	}
+}
+
 func TestProjectedRunViewEventsSuppressRawStreams(t *testing.T) {
 	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
 	raw := "provider-stream-must-not-appear"
