@@ -62,3 +62,22 @@ func TestProviderEvidenceValidationRejectsMalformedDependency(t *testing.T) {
 		t.Fatal("accepted malformed dependency evidence")
 	}
 }
+
+func TestProviderEvidenceValidationAcceptsLegacyUnnamedDependency(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("d", 64)
+	evidence := ProviderEvidence{
+		CapabilityID: "cap", ProviderID: "provider", ContractVersion: "1", DeploymentID: "deployment",
+		ProviderKind: "executable", IntegrityDigest: digest,
+		Dependencies: []ProviderDependencyEvidence{{
+			ProviderID: "binding.child", ContractVersion: "1", DeploymentID: "deployment.child",
+			ProviderKind: "executable", IntegrityDigest: digest,
+		}},
+	}
+	if err := evidence.Validate(); err != nil {
+		t.Fatalf("legacy persisted dependency was rejected: %v", err)
+	}
+
+	if err := evidence.descriptor().Validate(); err == nil {
+		t.Fatal("new provider preparation accepted an unnamed dependency")
+	}
+}

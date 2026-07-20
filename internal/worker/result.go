@@ -105,7 +105,7 @@ func (p ProviderEvidence) Validate() error {
 	if (p.IdempotencyContract == "") != (p.IdempotencyKey == "") {
 		return errors.New("idempotency_contract and idempotency_key must appear together")
 	}
-	return p.descriptor().Validate()
+	return p.descriptor().ValidatePersisted()
 }
 func (p ProviderEvidence) SameProvider(other ProviderEvidence) bool {
 	return p.descriptor().Equal(other.descriptor())
