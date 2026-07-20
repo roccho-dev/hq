@@ -373,8 +373,8 @@ func validateLocalToolActionWithBindings(action core.LocalToolAction, bindings m
 		}
 	}
 	if action.RunView != nil {
-		if action.RunView.Policy != "required" {
-			return errors.New("run_view.policy must be required")
+		if action.RunView.Policy != "required" && action.RunView.Policy != "optional" {
+			return errors.New("run_view.policy must be required or optional")
 		}
 		for field, value := range map[string]string{
 			"tool_id": action.RunView.ToolID, "tool_version": action.RunView.ToolVersion, "action_id": action.RunView.ActionID,

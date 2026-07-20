@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	current "hq/internal/adapter/current"
 	"hq/internal/core"
 	"hq/internal/hqprofile"
 	"hq/internal/worker"
@@ -47,7 +48,7 @@ func TestRunViewSelectionUsesOnlyCanonicalBoundedEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if selection.Policy != "required" || selection.ViewID != "hq-run-1" || selection.NativeSessionID != "native-1" {
+	if selection.Policy != "required" || selection.ViewID != "hq-run-1" {
 		t.Fatalf("selection=%+v", selection)
 	}
 
@@ -99,14 +100,28 @@ func TestRunViewReadExecutesOneFiniteProviderActionAndBoundsContent(t *testing.T
 	}
 }
 
-func TestRunViewSelectionSupportsOptionalPolicyWithoutDispatch(t *testing.T) {
+func TestRunViewSelectionSupportsLoadedOptionalPlanWithoutDispatch(t *testing.T) {
 	environment := runViewTestEnvironment("optional", "view.open", false)
+	worldRows := strings.Join([]string{
+		`{"kind":"hq.local-tool.v1","tool_id":"main","tool_version":"1","binding_ref":"local-tool.main","binding_contract_version":"1","actions":[{"action_id":"run","argv":[{"literal":"run"}],"stdin":{"mode":"none","max_bytes":0},"limits":{"timeout_ms":1000,"stdout_bytes":4096,"stderr_bytes":4096},"output":{"format":"json"},"run_view":{"policy":"optional","tool_id":"view","tool_version":"1","action_id":"view.open"},"lifecycle":"one-shot","risk":"low","approval":"explicit"}]}`,
+		`{"kind":"hq.local-tool.v1","tool_id":"view","tool_version":"1","binding_ref":"local-tool.view","binding_contract_version":"1","actions":[{"action_id":"view.open","inputs":[{"name":"view_id","type":"string","required":true},{"name":"run_id","type":"string","required":true},{"name":"events_path","type":"string","required":true}],"argv":[{"literal":"open"}],"stdin":{"mode":"none","max_bytes":0},"limits":{"timeout_ms":1000,"stdout_bytes":4096,"stderr_bytes":4096},"output":{"format":"json"},"lifecycle":"one-shot","risk":"low","approval":"explicit"}]}`,
+	}, "\n")
+	world, err := current.LoadSchemaJSONL(strings.NewReader(worldRows))
+	if err != nil {
+		t.Fatal(err)
+	}
+	environment.World = world
+	beforeInstructions, _ := json.Marshal(environment.Instructions)
+	beforeResults, _ := json.Marshal(environment.Results)
 	selection, err := selectRunView("run-1", environment)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if selection.Policy != "optional" || selection.Failure != nil || selection.OpenActionID != "view.open" {
 		t.Fatalf("selection=%+v", selection)
+	}
+	if string(beforeInstructions) != mustMarshalJSON(t, environment.Instructions) || string(beforeResults) != mustMarshalJSON(t, environment.Results) {
+		t.Fatal("loaded optional plan changed canonical evidence")
 	}
 }
 
@@ -194,8 +209,11 @@ func TestRunViewOperationUsesOneExactFiniteAction(t *testing.T) {
 	if err := json.Unmarshal(request.Payload, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.ActionID != "view.focus" || string(payload.Input["native_session_id"]) != `"native-1"` || string(payload.Input["run_id"]) != `"run-1"` {
+	if payload.ActionID != "view.focus" || string(payload.Input["view_id"]) != `"hq-run-1"` || string(payload.Input["run_id"]) != `"run-1"` {
 		t.Fatalf("payload=%s", request.Payload)
+	}
+	if _, ok := payload.Input["native_session_id"]; ok {
+		t.Fatalf("native reference escaped into provider input: %s", request.Payload)
 	}
 	if len(environment.Instructions) != beforeInstructionCount || len(environment.Results) != beforeResultCount {
 		t.Fatal("view operation changed accepted-instruction or agent-run evidence counts")
@@ -204,7 +222,7 @@ func TestRunViewOperationUsesOneExactFiniteAction(t *testing.T) {
 	if err := json.Unmarshal(bytes.TrimSpace(output.Bytes()), &receipt); err != nil {
 		t.Fatal(err)
 	}
-	if receipt.Status != "focused" || receipt.ViewReference != "native-1" {
+	if receipt.Status != "focused" {
 		t.Fatalf("receipt=%+v", receipt)
 	}
 }
@@ -251,9 +269,9 @@ func TestRunViewOperationReturnsTypedBindingAndActionFailures(t *testing.T) {
 }
 
 func TestRunViewOperationContractRejectsFallbackInputs(t *testing.T) {
-	selection := runViewSelection{RunID: "run-1", ViewID: "hq-run-1", NativeSessionID: "native-1"}
+	selection := runViewSelection{RunID: "run-1", ViewID: "hq-run-1"}
 	action := core.LocalToolAction{Inputs: []core.LocalToolInput{{Name: "ambient_path", Type: "string", Required: true}}}
-	if _, failure := buildRunViewOperationInput(action, selection, "/events", 1024, false); failure == nil || failure.Code != "view_contract_invalid" {
+	if _, failure := buildRunViewOperationInput(action, selection, "focus", "/events", 1024, false); failure == nil || failure.Code != "view_contract_invalid" {
 		t.Fatalf("failure=%+v", failure)
 	}
 	if got := runViewOperationActionID("view.open", "close"); got != "view.close" {
@@ -318,8 +336,12 @@ func mustMarshalJSON(t *testing.T, value any) string {
 	return string(encoded)
 }
 
-func TestRunViewOperationReturnsTypedFailureWhenNativeHintIsRequired(t *testing.T) {
-	environment := runViewTestEnvironment("required", "view.open", false)
+func TestRunViewOperationRejectsRequiredNativeReferenceBeforeProviderExecution(t *testing.T) {
+	environment := runViewTestEnvironment("required", "view.open", true)
+	environment.World.LocalTools[1].Actions[1].Inputs = append(
+		environment.World.LocalTools[1].Actions[1].Inputs,
+		core.LocalToolInput{Name: "native_session_id", Type: "string", Required: true},
+	)
 	selection, err := selectRunView("run-1", environment)
 	if err != nil {
 		t.Fatal(err)
@@ -337,12 +359,12 @@ func TestRunViewOperationReturnsTypedFailureWhenNativeHintIsRequired(t *testing.
 	if err := json.Unmarshal(bytes.TrimSpace(output.Bytes()), &receipt); err != nil {
 		t.Fatal(err)
 	}
-	if receipt.Failure == nil || receipt.Failure.Code != "view_reference_stale" {
+	if receipt.Failure == nil || receipt.Failure.Code != "view_contract_invalid" {
 		t.Fatalf("receipt=%+v", receipt)
 	}
 }
 
-func TestRunViewOperationRejectsNativeHintFromDifferentVerifiedProvider(t *testing.T) {
+func TestRunViewDestroyedSameProviderFailsClosedWithoutFallback(t *testing.T) {
 	environment := runViewTestEnvironment("required", "view.open", true)
 	selection, err := selectRunView("run-1", environment)
 	if err != nil {
@@ -350,25 +372,217 @@ func TestRunViewOperationRejectsNativeHintFromDifferentVerifiedProvider(t *testi
 	}
 	provider := workeradapter.ProviderDescriptor{
 		CapabilityID: "local-tool:view@1/view.focus", ProviderID: "local-tool.view", ContractVersion: "1",
-		DeploymentID: "view@1", ProviderKind: "executable", IntegrityDigest: "sha256:" + strings.Repeat("1", 64),
+		DeploymentID: "view@1", ProviderKind: "executable", IntegrityDigest: "sha256:" + strings.Repeat("0", 64),
 	}
-	adapter := &recordingRunViewAdapter{completion: workeradapter.Completion{FinalText: "must not execute"}}
+	beforeInstructions, _ := json.Marshal(environment.Instructions)
+	beforeResults, _ := json.Marshal(environment.Results)
+	for _, operation := range []string{"focus", "read", "close"} {
+		t.Run(operation, func(t *testing.T) {
+			adapter := &recordingRunViewAdapter{err: errors.New("generic view was destroyed")}
+			preparer := &recordingRunViewPreparer{prepared: workeradapter.Prepared{Adapter: adapter, Provider: &provider}}
+			var output bytes.Buffer
+			code := executeRunViewOperation(
+				context.Background(), &output, operation, preparer, selection,
+				hqprofile.Profile{WorkspaceRoot: "/workspace", EventsPath: "/events/events.jsonl"}, 1024,
+			)
+			if code != 2 || len(preparer.requests) != 1 || len(adapter.requests) != 1 {
+				t.Fatalf("code=%d output=%q prepares=%d executes=%d", code, output.String(), len(preparer.requests), len(adapter.requests))
+			}
+			var receipt runViewOperationReceipt
+			if err := json.Unmarshal(bytes.TrimSpace(output.Bytes()), &receipt); err != nil {
+				t.Fatal(err)
+			}
+			if receipt.Failure == nil || receipt.Failure.Code != "view_provider_failed" ||
+				!strings.Contains(receipt.Failure.Message, "destroyed") {
+				t.Fatalf("receipt=%+v", receipt)
+			}
+			assertRunViewPublicJSONShape(t, output.Bytes())
+		})
+	}
+	if string(beforeInstructions) != mustMarshalJSON(t, environment.Instructions) || string(beforeResults) != mustMarshalJSON(t, environment.Results) {
+		t.Fatal("destroyed-view failures changed canonical evidence")
+	}
+}
+
+func TestRunViewCloseOpenThenFocusReadCloseUsesStableGenericViewID(t *testing.T) {
+	environment := runViewTestEnvironment("required", "view.open", true)
+	provider := workeradapter.ProviderDescriptor{
+		CapabilityID: "local-tool:view@1", ProviderID: "local-tool.view", ContractVersion: "1",
+		DeploymentID: "view@1", ProviderKind: "executable", IntegrityDigest: "sha256:" + strings.Repeat("0", 64),
+	}
+	newNativeReference := "native-r2"
+	adapter := &recordingRunViewAdapter{completion: workeradapter.Completion{FinalText: "current", NativeSessionID: &newNativeReference}}
 	preparer := &recordingRunViewPreparer{prepared: workeradapter.Prepared{Adapter: adapter, Provider: &provider}}
-	var output bytes.Buffer
-	code := executeRunViewOperation(
-		context.Background(), &output, "focus", preparer, selection,
-		hqprofile.Profile{WorkspaceRoot: "/workspace", EventsPath: "/events/events.jsonl"}, 1024,
-	)
-	if code != 2 || len(preparer.requests) != 1 || len(adapter.requests) != 0 {
-		t.Fatalf("code=%d output=%q prepares=%d executes=%d", code, output.String(), len(preparer.requests), len(adapter.requests))
+	profile := hqprofile.Profile{WorkspaceRoot: "/workspace", EventsPath: "/events/events.jsonl"}
+	beforeInstructions, _ := json.Marshal(environment.Instructions)
+	beforeResults, _ := json.Marshal(environment.Results)
+
+	for _, operation := range []string{"close", "open"} {
+		selection, err := selectRunView("run-1", environment)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var output bytes.Buffer
+		if code := executeRunViewOperation(context.Background(), &output, operation, preparer, selection, profile, 1024); code != 0 {
+			t.Fatalf("operation=%s code=%d output=%q", operation, code, output.String())
+		}
+		assertRunViewPublicJSONShape(t, output.Bytes())
 	}
-	var receipt runViewOperationReceipt
-	if err := json.Unmarshal(bytes.TrimSpace(output.Bytes()), &receipt); err != nil {
+	for _, operation := range []string{"focus", "read", "close"} {
+		selection, err := selectRunView("run-1", environment)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var output bytes.Buffer
+		if code := executeRunViewOperation(context.Background(), &output, operation, preparer, selection, profile, 1024); code != 0 {
+			t.Fatalf("operation=%s code=%d output=%q", operation, code, output.String())
+		}
+		assertRunViewPublicJSONShape(t, output.Bytes())
+	}
+	if len(preparer.requests) != 5 || len(adapter.requests) != 5 {
+		t.Fatalf("prepares=%d executes=%d", len(preparer.requests), len(adapter.requests))
+	}
+	for _, request := range adapter.requests {
+		var payload runViewLocalToolPayload
+		if err := json.Unmarshal(request.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if string(payload.Input["view_id"]) != `"hq-run-1"` || string(payload.Input["run_id"]) != `"run-1"` {
+			t.Fatalf("payload=%s", request.Payload)
+		}
+		if _, ok := payload.Input["native_session_id"]; ok {
+			t.Fatalf("native replacement became public state: %s", request.Payload)
+		}
+	}
+	if string(beforeInstructions) != mustMarshalJSON(t, environment.Instructions) || string(beforeResults) != mustMarshalJSON(t, environment.Results) {
+		t.Fatal("close/open sequence changed canonical evidence")
+	}
+}
+
+func TestRunViewSixOperationsPreserveEvidenceAndAreIdempotent(t *testing.T) {
+	environment := runViewTestEnvironment("required", "view.open", true)
+	eventsFile, err := os.CreateTemp(t.TempDir(), "events-*.jsonl")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if receipt.Failure == nil || receipt.Failure.Code != "view_reference_stale" ||
-		!strings.Contains(receipt.Failure.Message, "different verified provider") {
-		t.Fatalf("receipt=%+v", receipt)
+	for _, row := range environment.Results {
+		if err := worker.EncodeJSONLine(eventsFile, row); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := eventsFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	environment.Profile = hqprofile.Profile{WorkspaceRoot: "/workspace", EventsPath: eventsFile.Name()}
+	selection, err := selectRunView("run-1", environment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := workeradapter.ProviderDescriptor{
+		CapabilityID: "local-tool:view@1", ProviderID: "local-tool.view", ContractVersion: "1",
+		DeploymentID: "view@1", ProviderKind: "executable", IntegrityDigest: "sha256:" + strings.Repeat("0", 64),
+	}
+	adapter := &recordingRunViewAdapter{completion: workeradapter.Completion{FinalText: "current"}}
+	preparer := &recordingRunViewPreparer{prepared: workeradapter.Prepared{Adapter: adapter, Provider: &provider}}
+	beforeInstructions, _ := json.Marshal(environment.Instructions)
+	beforeResults, _ := json.Marshal(environment.Results)
+
+	var listOutputs [2]bytes.Buffer
+	for index := range listOutputs {
+		var stderr bytes.Buffer
+		if code := listRunViews(context.Background(), &listOutputs[index], &stderr, environment, preparer, 0, 1024); code != 0 {
+			t.Fatalf("list iteration=%d code=%d stderr=%q", index, code, stderr.String())
+		}
+		assertRunViewPublicJSONShape(t, listOutputs[index].Bytes())
+	}
+	if listOutputs[0].String() != listOutputs[1].String() {
+		t.Fatalf("list outputs differ:\n%s\n%s", listOutputs[0].String(), listOutputs[1].String())
+	}
+
+	for _, operation := range []string{"open", "focus", "read", "close"} {
+		var outputs [2]bytes.Buffer
+		for index := range outputs {
+			if code := executeRunViewOperation(context.Background(), &outputs[index], operation, preparer, selection, environment.Profile, 1024); code != 0 {
+				t.Fatalf("operation=%s iteration=%d code=%d output=%q", operation, index, code, outputs[index].String())
+			}
+			assertRunViewPublicJSONShape(t, outputs[index].Bytes())
+		}
+		if outputs[0].String() != outputs[1].String() {
+			t.Fatalf("operation=%s outputs differ:\n%s\n%s", operation, outputs[0].String(), outputs[1].String())
+		}
+	}
+
+	var tailOutputs [2]bytes.Buffer
+	for index := range tailOutputs {
+		if _, _, failure := prepareRunViewOperation(context.Background(), preparer, selection, environment.Profile, "open", 1024, false); failure != nil {
+			t.Fatalf("tail iteration=%d prepare failure=%+v", index, failure)
+		}
+		var stderr bytes.Buffer
+		if code := tailRunView(context.Background(), &tailOutputs[index], &stderr, eventsFile.Name(), selection, false, time.Millisecond, 1024); code != 0 {
+			t.Fatalf("tail iteration=%d code=%d stderr=%q", index, code, stderr.String())
+		}
+		assertRunViewPublicJSONShape(t, tailOutputs[index].Bytes())
+	}
+	if tailOutputs[0].String() != tailOutputs[1].String() {
+		t.Fatalf("tail outputs differ:\n%s\n%s", tailOutputs[0].String(), tailOutputs[1].String())
+	}
+	if len(preparer.requests) != 12 || len(adapter.requests) != 8 {
+		t.Fatalf("prepares=%d executes=%d", len(preparer.requests), len(adapter.requests))
+	}
+	if string(beforeInstructions) != mustMarshalJSON(t, environment.Instructions) || string(beforeResults) != mustMarshalJSON(t, environment.Results) {
+		t.Fatal("six operations changed accepted-instruction or agent-run evidence")
+	}
+}
+
+func assertRunViewPublicJSONShape(t *testing.T, output []byte) {
+	t.Helper()
+	decoder := json.NewDecoder(bytes.NewReader(output))
+	for decoder.More() {
+		var record map[string]any
+		if err := decoder.Decode(&record); err != nil {
+			t.Fatal(err)
+		}
+		assertRunViewPublicKeys(t, record)
+		allowed := map[string]bool{}
+		switch {
+		case record["operation"] != nil:
+			for _, key := range []string{"version", "operation", "run_id", "view_id", "instruction_id", "lifecycle", "policy", "status", "content", "failure"} {
+				allowed[key] = true
+			}
+		case record["seq"] != nil:
+			for _, key := range []string{"version", "run_id", "view_id", "seq", "recorded_at", "lifecycle", "final", "failure"} {
+				allowed[key] = true
+			}
+		default:
+			for _, key := range []string{"version", "run_id", "view_id", "instruction_id", "lifecycle", "policy", "available", "final", "failure"} {
+				allowed[key] = true
+			}
+		}
+		for key := range record {
+			if !allowed[key] {
+				t.Fatalf("public run-view JSON contains unsupported top-level key %q: %s", key, output)
+			}
+		}
+	}
+}
+
+func assertRunViewPublicKeys(t *testing.T, value any) {
+	t.Helper()
+	switch value := value.(type) {
+	case map[string]any:
+		for key, nested := range value {
+			lower := strings.ToLower(key)
+			for _, forbidden := range []string{"view_reference", "native", "provider", "executable"} {
+				if strings.Contains(lower, forbidden) {
+					t.Fatalf("public run-view JSON contains forbidden key %q", key)
+				}
+			}
+			assertRunViewPublicKeys(t, nested)
+		}
+	case []any:
+		for _, nested := range value {
+			assertRunViewPublicKeys(t, nested)
+		}
 	}
 }
 
@@ -404,9 +618,9 @@ func runViewTestEnvironment(policy, openActionID string, withReference bool) run
 		ToolID: "view", ToolVersion: "1", BindingRef: "local-tool.view", BindingContractVersion: "1",
 		Actions: []core.LocalToolAction{
 			{ActionID: "view.open", Inputs: []core.LocalToolInput{{Name: "view_id", Type: "string", Required: true}, {Name: "run_id", Type: "string", Required: true}, {Name: "events_path", Type: "string", Required: true}}},
-			{ActionID: "view.focus", Inputs: []core.LocalToolInput{{Name: "view_id", Type: "string", Required: true}, {Name: "run_id", Type: "string", Required: true}, {Name: "native_session_id", Type: "string", Required: true}}},
-			{ActionID: "view.read", Inputs: []core.LocalToolInput{{Name: "view_id", Type: "string", Required: true}, {Name: "run_id", Type: "string", Required: true}, {Name: "native_session_id", Type: "string", Required: false}, {Name: "max_bytes", Type: "integer", Required: true}}},
-			{ActionID: "view.close", Inputs: []core.LocalToolInput{{Name: "view_id", Type: "string", Required: true}, {Name: "run_id", Type: "string", Required: true}, {Name: "native_session_id", Type: "string", Required: true}}},
+			{ActionID: "view.focus", Inputs: []core.LocalToolInput{{Name: "view_id", Type: "string", Required: true}, {Name: "run_id", Type: "string", Required: true}}},
+			{ActionID: "view.read", Inputs: []core.LocalToolInput{{Name: "view_id", Type: "string", Required: true}, {Name: "run_id", Type: "string", Required: true}, {Name: "max_bytes", Type: "integer", Required: true}}},
+			{ActionID: "view.close", Inputs: []core.LocalToolInput{{Name: "view_id", Type: "string", Required: true}, {Name: "run_id", Type: "string", Required: true}}},
 		},
 	}
 	mainAction := core.LocalToolAction{ActionID: "run"}

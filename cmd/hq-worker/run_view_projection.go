@@ -78,7 +78,6 @@ type runViewOperationReceipt struct {
 	Lifecycle     string          `json:"lifecycle"`
 	Policy        string          `json:"policy"`
 	Status        string          `json:"status"`
-	ViewReference string          `json:"view_reference,omitempty"`
 	Content       *runViewContent `json:"content,omitempty"`
 	Failure       *runViewFailure `json:"failure,omitempty"`
 }
@@ -95,16 +94,14 @@ type runViewEvent struct {
 }
 
 type runViewSelection struct {
-	RunID           string
-	ViewID          string
-	Policy          string
-	Instruction     worker.Instruction
-	Detail          worker.RunDetail
-	ViewTool        core.LocalToolDefinition
-	OpenActionID    string
-	NativeSessionID string
-	ViewProvider    *worker.ProviderEvidence
-	Failure         *runViewFailure
+	RunID        string
+	ViewID       string
+	Policy       string
+	Instruction  worker.Instruction
+	Detail       worker.RunDetail
+	ViewTool     core.LocalToolDefinition
+	OpenActionID string
+	Failure      *runViewFailure
 }
 
 type runViewLocalToolPayload struct {
@@ -273,11 +270,6 @@ func selectRunView(runID string, environment runViewEnvironment) (runViewSelecti
 		return runViewSelection{}, fmt.Errorf("canonical instruction %q is unavailable", detail.Run.InstructionID)
 	}
 	selection.Instruction = instruction
-	if viewEvidence := latestRunViewEvidence(detail.Events); viewEvidence != nil {
-		selection.NativeSessionID = viewEvidence.NativeSessionID
-		provider := viewEvidence.Provider
-		selection.ViewProvider = &provider
-	}
 	if instruction.Target != "local-tool" || instruction.Op != "run" {
 		return selection, nil
 	}
@@ -353,16 +345,6 @@ func localToolActionByID(tool core.LocalToolDefinition, actionID string) (core.L
 	return core.LocalToolAction{}, false
 }
 
-func latestRunViewEvidence(events []worker.ResultRow) *worker.RunViewEvidence {
-	for index := len(events) - 1; index >= 0; index-- {
-		if events[index].View != nil {
-			view := *events[index].View
-			return &view
-		}
-	}
-	return nil
-}
-
 func runViewOperationActionID(openActionID, operation string) string {
 	if operation == "open" {
 		return openActionID
@@ -391,7 +373,7 @@ func prepareRunViewOperation(ctx context.Context, preparer runViewPreparer, sele
 	if !ok {
 		return workeradapter.Request{}, workeradapter.Prepared{}, &runViewFailure{Code: "view_operation_unavailable", Message: fmt.Sprintf("the selected view plan does not define %s", operation)}
 	}
-	input, failure := buildRunViewOperationInput(action, selection, profile.EventsPath, maxBytes, follow)
+	input, failure := buildRunViewOperationInput(action, selection, operation, profile.EventsPath, maxBytes, follow)
 	if failure != nil {
 		return workeradapter.Request{}, workeradapter.Prepared{}, failure
 	}
@@ -415,54 +397,30 @@ func prepareRunViewOperation(ctx context.Context, preparer runViewPreparer, sele
 	if prepared.RunViewRequired {
 		return request, workeradapter.Prepared{}, &runViewFailure{Code: "view_contract_invalid", Message: "view operations cannot recursively require another view"}
 	}
-	if _, usesNativeReference := input["native_session_id"]; usesNativeReference {
-		if selection.ViewProvider == nil || !sameRunViewProvider(selection.ViewProvider, prepared.Provider) {
-			return request, workeradapter.Prepared{}, &runViewFailure{
-				Code: "view_reference_stale", Message: "the native view reference belongs to a different verified provider",
-			}
-		}
-	}
 	return request, prepared, nil
 }
 
-func sameRunViewProvider(canonical *worker.ProviderEvidence, current *workeradapter.ProviderDescriptor) bool {
-	if canonical == nil || current == nil ||
-		canonical.ProviderID != current.ProviderID ||
-		canonical.ContractVersion != current.ContractVersion ||
-		canonical.DeploymentID != current.DeploymentID ||
-		canonical.ProviderKind != current.ProviderKind ||
-		canonical.IntegrityDigest != current.IntegrityDigest ||
-		canonical.ConfigurationDigest != current.ConfigurationDigest ||
-		len(canonical.Dependencies) != len(current.Dependencies) {
-		return false
-	}
-	for index := range canonical.Dependencies {
-		left := canonical.Dependencies[index]
-		right := current.Dependencies[index]
-		if left.Name != right.Name ||
-			left.ProviderID != right.ProviderID ||
-			left.ContractVersion != right.ContractVersion ||
-			left.DeploymentID != right.DeploymentID ||
-			left.ProviderKind != right.ProviderKind ||
-			left.IntegrityDigest != right.IntegrityDigest ||
-			left.ConfigurationDigest != right.ConfigurationDigest {
-			return false
-		}
-	}
-	return true
-}
-
-func buildRunViewOperationInput(action core.LocalToolAction, selection runViewSelection, eventsPath string, maxBytes int, follow bool) (map[string]json.RawMessage, *runViewFailure) {
+func buildRunViewOperationInput(action core.LocalToolAction, selection runViewSelection, operation, eventsPath string, maxBytes int, follow bool) (map[string]json.RawMessage, *runViewFailure) {
 	values := map[string]any{
 		"view_id": selection.ViewID, "run_id": selection.RunID, "events_path": eventsPath,
-		"native_session_id": selection.NativeSessionID, "max_bytes": maxBytes, "follow": follow,
+		"max_bytes": maxBytes, "follow": follow,
 	}
 	types := map[string]string{
-		"view_id": "string", "run_id": "string", "events_path": "string", "native_session_id": "string",
+		"view_id": "string", "run_id": "string", "events_path": "string",
 		"max_bytes": "integer", "follow": "boolean",
 	}
 	input := make(map[string]json.RawMessage)
+	requiredGenericInputs := map[string]bool{"view_id": false, "run_id": false}
+	if operation == "open" {
+		requiredGenericInputs["events_path"] = false
+	}
 	for _, definition := range action.Inputs {
+		if definition.Name == "native_session_id" {
+			if definition.Required {
+				return nil, &runViewFailure{Code: "view_contract_invalid", Message: "view actions cannot require a native session reference"}
+			}
+			continue
+		}
 		expectedType, known := types[definition.Name]
 		if !known {
 			if definition.Required {
@@ -473,18 +431,20 @@ func buildRunViewOperationInput(action core.LocalToolAction, selection runViewSe
 		if definition.Type != expectedType {
 			return nil, &runViewFailure{Code: "view_contract_invalid", Message: fmt.Sprintf("view action input %q must have type %s", definition.Name, expectedType)}
 		}
-		value := values[definition.Name]
-		if definition.Name == "native_session_id" && strings.TrimSpace(selection.NativeSessionID) == "" {
-			if definition.Required {
-				return nil, &runViewFailure{Code: "view_reference_stale", Message: "the view action requires a current native view reference"}
-			}
-			continue
+		if _, required := requiredGenericInputs[definition.Name]; required && definition.Required {
+			requiredGenericInputs[definition.Name] = true
 		}
+		value := values[definition.Name]
 		encoded, err := json.Marshal(value)
 		if err != nil {
 			return nil, &runViewFailure{Code: "view_contract_invalid", Message: err.Error()}
 		}
 		input[definition.Name] = encoded
+	}
+	for name, declared := range requiredGenericInputs {
+		if !declared {
+			return nil, &runViewFailure{Code: "view_contract_invalid", Message: fmt.Sprintf("view action must require generic input %q", name)}
+		}
 	}
 	return input, nil
 }
@@ -498,17 +458,10 @@ func executeRunViewOperation(ctx context.Context, stdout io.Writer, operation st
 	if err != nil {
 		return emitRunViewNonGreen(stdout, operation, selection, &runViewFailure{Code: "view_provider_failed", Message: err.Error()})
 	}
-	viewReference := selection.NativeSessionID
-	if completion.NativeSessionID != nil && strings.TrimSpace(*completion.NativeSessionID) != "" {
-		viewReference = *completion.NativeSessionID
-	}
-	if operation == "open" && strings.TrimSpace(viewReference) == "" {
-		return emitRunViewNonGreen(stdout, operation, selection, &runViewFailure{Code: "view_provider_failed", Message: "open returned no native view reference"})
-	}
 	receipt := runViewOperationReceipt{
 		Version: runViewProjectionVersion, Operation: operation, RunID: selection.RunID, ViewID: selection.ViewID,
 		InstructionID: selection.Instruction.ID, Lifecycle: selection.Detail.Run.Status, Policy: selection.Policy,
-		Status: operation + "ed", ViewReference: viewReference,
+		Status: operation + "ed",
 	}
 	if operation == "read" {
 		content, truncated := boundedString(completion.FinalText, maxBytes)
@@ -528,7 +481,6 @@ func executeRunViewOperation(ctx context.Context, stdout io.Writer, operation st
 	}
 	if operation == "close" {
 		receipt.Status = "closed"
-		receipt.ViewReference = ""
 	}
 	if err := worker.EncodeJSONLine(stdout, receipt); err != nil {
 		return 1
