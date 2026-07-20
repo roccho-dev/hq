@@ -9,11 +9,22 @@ on:
 permissions:
   contents: read
 
+env:
+  HQ_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
 jobs:
   linux-official-hq-proof:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HQ_SOURCE_SHA }}
+      - name: Assert exact source head
+        shell: bash
+        run: |
+          actual="$(git rev-parse HEAD)"
+          printf 'expected=%s\nactual=%s\n' "$HQ_SOURCE_SHA" "$actual"
+          test "$actual" = "$HQ_SOURCE_SHA"
       - uses: actions/setup-go@v5
         with:
           go-version: "1.23.12"
@@ -85,6 +96,17 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.HQ_SOURCE_SHA }}
+      - name: Assert exact source head
+        shell: pwsh
+        run: |
+          $actual = (git rev-parse HEAD).Trim()
+          Write-Host "expected=$env:HQ_SOURCE_SHA"
+          Write-Host "actual=$actual"
+          if ($actual -ne $env:HQ_SOURCE_SHA) {
+            throw "source HEAD mismatch: expected $env:HQ_SOURCE_SHA, got $actual"
+          }
       - uses: actions/setup-go@v5
         with:
           go-version: "1.23.12"
