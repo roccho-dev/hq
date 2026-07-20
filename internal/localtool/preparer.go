@@ -111,8 +111,9 @@ func (p Preparer) Prepare(_ context.Context, request adapter.Request) (adapter.P
 		return adapter.Prepared{}, blocked("local_tool_provider_invalid", err.Error())
 	}
 	return adapter.Prepared{
-		Adapter:  &preparedAdapter{binding: binding, dependencies: dependencies, action: action, plan: plan},
-		Provider: &descriptor,
+		Adapter:         &preparedAdapter{binding: binding, dependencies: dependencies, action: action, plan: plan},
+		Provider:        &descriptor,
+		RunViewRequired: action.RunView != nil && action.RunView.Policy == "required",
 	}, nil
 }
 
@@ -301,21 +302,21 @@ func (a *preparedAdapter) Run(ctx context.Context, request adapter.Request, emit
 		Stdin: append([]byte(nil), a.plan.stdin...), StdinLimit: int64(a.action.Stdin.MaxBytes),
 		StdoutLimit: int64(a.action.Limits.StdoutBytes), StderrLimit: int64(a.action.Limits.StderrBytes), Env: a.binding.EnvironmentStrings(),
 	})
-	var nativeSessionID *string
+	var output validatedOutput
 	if runErr == nil {
 		var err error
-		nativeSessionID, err = validateOutput(a.action, result)
+		output, err = validateOutput(a.action, result)
 		if err != nil {
 			return adapter.Completion{}, err
 		}
 	}
 	if len(result.Stdout) != 0 && emit != nil {
-		if err := emit(adapter.Output{Kind: adapter.OutputStdout, Message: string(result.Stdout), NativeSessionID: nativeSessionID}); err != nil {
+		if err := emit(adapter.Output{Kind: adapter.OutputStdout, Message: string(result.Stdout), NativeSessionID: output.nativeSessionID}); err != nil {
 			return adapter.Completion{}, err
 		}
 	}
 	if len(result.Stderr) != 0 && emit != nil {
-		if err := emit(adapter.Output{Kind: adapter.OutputStderr, Message: string(result.Stderr), NativeSessionID: nativeSessionID}); err != nil {
+		if err := emit(adapter.Output{Kind: adapter.OutputStderr, Message: string(result.Stderr), NativeSessionID: output.nativeSessionID}); err != nil {
 			return adapter.Completion{}, err
 		}
 	}
@@ -329,66 +330,78 @@ func (a *preparedAdapter) Run(ctx context.Context, request adapter.Request, emit
 		}
 		return adapter.Completion{}, failed("local_tool_process_failed", "local tool process exited unsuccessfully")
 	}
-	finalText := strings.TrimSpace(string(result.Stdout))
+	finalText := output.finalText
+	if finalText == "" {
+		finalText = strings.TrimSpace(string(result.Stdout))
+	}
 	if finalText == "" {
 		finalText = "local tool completed"
 	}
-	return adapter.Completion{FinalText: finalText, NativeSessionID: nativeSessionID}, nil
+	return adapter.Completion{FinalText: finalText, NativeSessionID: output.nativeSessionID}, nil
 }
 
-func validateOutput(action core.LocalToolAction, result directexec.Result) (*string, error) {
+type validatedOutput struct {
+	nativeSessionID *string
+	finalText       string
+}
+
+func validateOutput(action core.LocalToolAction, result directexec.Result) (validatedOutput, error) {
 	var stdoutValue any
 	switch action.Output.Format {
 	case "text":
 	case "json":
 		if err := decodeStrict(result.Stdout, &stdoutValue); err != nil {
-			return nil, failed("local_tool_output_invalid", fmt.Sprintf("stdout is not one JSON value: %v", err))
+			return validatedOutput{}, failed("local_tool_output_invalid", fmt.Sprintf("stdout is not one JSON value: %v", err))
 		}
 	case "jsonl":
 		values, err := decodeJSONL(result.Stdout)
 		if err != nil {
-			return nil, failed("local_tool_output_invalid", err.Error())
+			return validatedOutput{}, failed("local_tool_output_invalid", err.Error())
 		}
 		if len(values) != 0 {
 			stdoutValue = values[len(values)-1]
 		}
 	default:
-		return nil, failed("local_tool_output_invalid", "unsupported output format")
+		return validatedOutput{}, failed("local_tool_output_invalid", "unsupported output format")
 	}
-	selector := action.NativeRefs.Session
-	if selector == nil {
-		return nil, nil
+	output := validatedOutput{}
+	if action.NativeRefs.Session != nil {
+		value, err := selectOutputString(stdoutValue, *action.NativeRefs.Session, "native session", "local_tool_native_reference")
+		if err != nil {
+			return validatedOutput{}, err
+		}
+		output.nativeSessionID = &value
 	}
-	var source any
-	if selector.Source == "stdout" {
-		if action.Output.Format == "text" {
-			if err := json.Unmarshal(result.Stdout, &source); err != nil {
-				return nil, failed("local_tool_native_reference_invalid", "native session selector requires structured stdout")
-			}
-		} else {
-			source = stdoutValue
+	if action.Output.Final != nil {
+		value, err := selectOutputString(stdoutValue, *action.Output.Final, "final output", "local_tool_final_output")
+		if err != nil {
+			return validatedOutput{}, err
 		}
-	} else {
-		if err := json.Unmarshal(result.Stderr, &source); err != nil {
-			return nil, failed("local_tool_native_reference_invalid", "native session selector requires structured stderr")
-		}
+		output.finalText = value
+	}
+	return output, nil
+}
+
+func selectOutputString(source any, selector core.LocalToolNativeSelector, label, codePrefix string) (string, error) {
+	if selector.Source != "stdout" {
+		return "", failed(codePrefix+"_invalid", label+" selector requires structured stdout")
 	}
 	for _, segment := range selector.Path {
 		object, ok := source.(map[string]any)
 		if !ok {
-			return nil, failed("local_tool_native_reference_invalid", "native session selector traversed a non-object")
+			return "", failed(codePrefix+"_invalid", label+" selector traversed a non-object")
 		}
 		var present bool
 		source, present = object[segment]
 		if !present {
-			return nil, failed("local_tool_native_reference_missing", fmt.Sprintf("native session field %q is missing", segment))
+			return "", failed(codePrefix+"_missing", fmt.Sprintf("%s field %q is missing", label, segment))
 		}
 	}
 	value, ok := source.(string)
 	if !ok || strings.TrimSpace(value) == "" {
-		return nil, failed("local_tool_native_reference_invalid", "native session reference must be a non-empty string")
+		return "", failed(codePrefix+"_invalid", label+" must be a non-empty string")
 	}
-	return &value, nil
+	return value, nil
 }
 
 func decodeJSONL(data []byte) ([]any, error) {

@@ -13,6 +13,8 @@ import (
 
 var canonicalTargets = map[string]struct{}{"sh": {}, "herdr": {}, "codex": {}, "claude": {}, "host": {}, "local-tool": {}}
 
+const RunViewVersionV1 = "run-view.v1"
+
 func (r ResultRow) Validate() error {
 	if strings.TrimSpace(r.EventID) == "" {
 		return errors.New("event_id is required")
@@ -47,10 +49,18 @@ func (r ResultRow) Validate() error {
 			return err
 		}
 	}
+	if r.View != nil {
+		if r.Kind != ResultStarted {
+			return errors.New("run view evidence is allowed only on started results")
+		}
+		if err := r.View.Validate(); err != nil {
+			return err
+		}
+	}
 	switch r.Kind {
 	case ResultAccepted:
-		if r.Message != nil || r.Final != nil || r.Error != nil || r.Provider != nil {
-			return fmt.Errorf("%s cannot carry message, final, error, or provider", r.Kind)
+		if r.Message != nil || r.Final != nil || r.Error != nil || r.Provider != nil || r.View != nil {
+			return fmt.Errorf("%s cannot carry message, final, error, provider, or view", r.Kind)
 		}
 	case ResultStarted:
 		if r.Message != nil || r.Final != nil || r.Error != nil {
@@ -76,11 +86,26 @@ func (r ResultRow) Validate() error {
 	}
 	return nil
 }
+func (v RunViewEvidence) Validate() error {
+	if v.Version != RunViewVersionV1 {
+		return fmt.Errorf("run view version must be %q", RunViewVersionV1)
+	}
+	if v.Policy != "required" {
+		return errors.New("run view policy must be required")
+	}
+	if strings.TrimSpace(v.NativeSessionID) == "" {
+		return errors.New("run view native_session_id is required")
+	}
+	if err := v.Provider.Validate(); err != nil {
+		return fmt.Errorf("run view provider: %w", err)
+	}
+	return nil
+}
 func (p ProviderEvidence) Validate() error {
 	if (p.IdempotencyContract == "") != (p.IdempotencyKey == "") {
 		return errors.New("idempotency_contract and idempotency_key must appear together")
 	}
-	return p.descriptor().Validate()
+	return p.descriptor().ValidatePersisted()
 }
 func (p ProviderEvidence) SameProvider(other ProviderEvidence) bool {
 	return p.descriptor().Equal(other.descriptor())

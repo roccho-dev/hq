@@ -146,6 +146,7 @@ type LocalToolAction struct {
 	Limits     LocalToolLimits     `json:"limits"`
 	Output     LocalToolOutput     `json:"output"`
 	NativeRefs LocalToolNativeRefs `json:"native_refs,omitempty"`
+	RunView    *LocalToolRunView   `json:"run_view,omitempty"`
 	Lifecycle  string              `json:"lifecycle"`
 	Risk       string              `json:"risk"`
 	Approval   string              `json:"approval"`
@@ -179,11 +180,22 @@ type LocalToolLimits struct {
 }
 
 type LocalToolOutput struct {
-	Format string `json:"format"`
+	Format string                   `json:"format"`
+	Final  *LocalToolNativeSelector `json:"final,omitempty"`
 }
 
 type LocalToolNativeRefs struct {
 	Session *LocalToolNativeSelector `json:"session,omitempty"`
+}
+
+// LocalToolRunView declares a finite, exact provider that must make the run
+// visible before the selected action may execute. The provider is world
+// meaning; its executable identity remains selected-profile deployment data.
+type LocalToolRunView struct {
+	Policy      string `json:"policy"`
+	ToolID      string `json:"tool_id"`
+	ToolVersion string `json:"tool_version"`
+	ActionID    string `json:"action_id"`
 }
 
 // LocalToolNativeSelector is a fixed structured lookup. Path contains literal

@@ -66,6 +66,50 @@ func TestShowMissingRunReturnsStructuredError(t *testing.T) {
 	}
 }
 
+func TestViewReconstructsFinalWithoutRawStreamOrMutation(t *testing.T) {
+	root := t.TempDir()
+	events := filepath.Join(root, "events.jsonl")
+	at := time.Date(2026, 7, 20, 1, 0, 0, 0, time.UTC)
+	raw := "claude-raw-stream-must-not-appear"
+	log := worker.NewEventLog(events)
+	for _, row := range []worker.ResultRow{
+		{EventID: "view-e0", Version: worker.ResultVersionV1, RunID: "run-view", InstructionID: "ins-view", Target: "local-tool", Kind: worker.ResultAccepted, Seq: 0, RecordedAt: at},
+		{EventID: "view-e1", Version: worker.ResultVersionV1, RunID: "run-view", InstructionID: "ins-view", Target: "local-tool", Kind: worker.ResultStarted, Seq: 1, RecordedAt: at.Add(time.Second)},
+		{EventID: "view-e2", Version: worker.ResultVersionV1, RunID: "run-view", InstructionID: "ins-view", Target: "local-tool", Kind: worker.ResultStdout, Seq: 2, RecordedAt: at.Add(2 * time.Second), Message: &raw},
+		{EventID: "view-e3", Version: worker.ResultVersionV1, RunID: "run-view", InstructionID: "ins-view", Target: "local-tool", Kind: worker.ResultCompleted, Seq: 3, RecordedAt: at.Add(3 * time.Second), Final: &worker.FinalResult{Text: "compact Claude final"}},
+	} {
+		if err := log.Append(worker.ResultEntry(row)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before, err := os.ReadFile(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var firstOut, firstErr bytes.Buffer
+	args := []string{"view", "--events", events, "--run", "run-view", "--follow=false"}
+	if code := run(args, &firstOut, &firstErr); code != 0 {
+		t.Fatalf("first view code=%d stdout=%q stderr=%q", code, firstOut.String(), firstErr.String())
+	}
+	var replayOut, replayErr bytes.Buffer
+	if code := run(args, &replayOut, &replayErr); code != 0 {
+		t.Fatalf("replay view code=%d stdout=%q stderr=%q", code, replayOut.String(), replayErr.String())
+	}
+	if firstOut.String() != replayOut.String() || strings.Contains(firstOut.String(), raw) ||
+		!strings.Contains(firstOut.String(), "queued") || !strings.Contains(firstOut.String(), "running") ||
+		!strings.Contains(firstOut.String(), "completed") || !strings.Contains(firstOut.String(), "compact Claude final") {
+		t.Fatalf("first=%q replay=%q", firstOut.String(), replayOut.String())
+	}
+	after, err := os.ReadFile(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("view changed canonical evidence")
+	}
+}
+
 func writeObservationFixture(t *testing.T) (string, string) {
 	t.Helper()
 	root := t.TempDir()

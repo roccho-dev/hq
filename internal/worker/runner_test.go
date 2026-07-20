@@ -35,6 +35,17 @@ func (m *memoryAppender) Append(entry LogEntry) error {
 	return nil
 }
 
+type runnerFakeViewGateway struct {
+	calls int
+	view  *adapter.RunView
+	err   error
+}
+
+func (g *runnerFakeViewGateway) Open(context.Context, adapter.Request) (*adapter.RunView, error) {
+	g.calls++
+	return g.view, g.err
+}
+
 func approvedRunnerFixture(t *testing.T, instruction Instruction) ApprovalStore {
 	t.Helper()
 	digest, err := InstructionDigest(instruction)
@@ -148,6 +159,53 @@ func TestRunnerRecordsDynamicallyPreparedProviderBeforeDispatch(t *testing.T) {
 	provider := emitted[2].Result.Provider
 	if provider.ProviderID != descriptor.ProviderID || provider.IntegrityDigest != descriptor.IntegrityDigest || provider.IdempotencyKey == "" {
 		t.Fatalf("provider=%+v", provider)
+	}
+}
+
+func TestRunnerRequiredViewFailsClosedAndRecordsExactViewEvidence(t *testing.T) {
+	row := runnerRow(t, "plain")
+	execution := &runnerFakeAdapter{}
+	executionProvider := adapter.ProviderDescriptor{
+		CapabilityID: "local-tool:claude@1/run", ProviderID: "local-tool.claude", ContractVersion: "1",
+		DeploymentID: "claude-deployment", ProviderKind: "executable", IntegrityDigest: "sha256:" + strings.Repeat("a", 64),
+	}
+	registry, err := adapter.NewRegistry(adapter.Registration{Target: "sh", Preparer: adapter.PreparerFunc(func(context.Context, adapter.Request) (adapter.Prepared, error) {
+		return adapter.Prepared{Adapter: execution, Provider: &executionProvider, RunViewRequired: true}, nil
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	withoutView := NewRunner(t.TempDir(), registry, approvedRunnerFixture(t, row.Instruction))
+	emitted, unsuccessful, err := withoutView.Process(context.Background(), []ReadRow{row}, LogData{}, false, &memoryAppender{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unsuccessful != 1 || execution.calls != 0 || len(emitted) != 3 || emitted[2].Result.Error.Code != "view_unavailable" {
+		t.Fatalf("emitted=%+v unsuccessful=%d execution_calls=%d", emitted, unsuccessful, execution.calls)
+	}
+
+	viewProvider := adapter.ProviderDescriptor{
+		CapabilityID: "local-tool:herdr@1/run-view.open", ProviderID: "local-tool.herdr", ContractVersion: "2",
+		DeploymentID: "herdr-deployment", ProviderKind: "executable", IntegrityDigest: "sha256:" + strings.Repeat("b", 64),
+	}
+	gateway := &runnerFakeViewGateway{view: &adapter.RunView{
+		Policy: "required", Provider: viewProvider, NativeSessionID: "herdr-terminal-1",
+	}}
+	withView := NewRunner(t.TempDir(), registry, approvedRunnerFixture(t, row.Instruction))
+	withView.Views = gateway
+	emitted, unsuccessful, err = withView.Process(context.Background(), []ReadRow{row}, LogData{}, false, &memoryAppender{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unsuccessful != 0 || execution.calls != 1 || gateway.calls != 1 {
+		t.Fatalf("unsuccessful=%d execution_calls=%d view_calls=%d", unsuccessful, execution.calls, gateway.calls)
+	}
+	started := emitted[2].Result
+	if started == nil || started.Kind != ResultStarted || started.View == nil ||
+		started.View.Version != RunViewVersionV1 || started.View.Policy != "required" ||
+		started.View.NativeSessionID != "herdr-terminal-1" || started.View.Provider.ProviderID != "local-tool.herdr" {
+		t.Fatalf("started=%+v", started)
 	}
 }
 

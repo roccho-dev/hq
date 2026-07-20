@@ -29,8 +29,34 @@ func (f PreparerFunc) Prepare(ctx context.Context, request Request) (Prepared, e
 // Prepared binds the exact transient adapter and verified provider selected
 // for one request. Provider may be nil only for legacy/static registrations.
 type Prepared struct {
-	Adapter  Adapter
-	Provider *ProviderDescriptor
+	Adapter         Adapter
+	Provider        *ProviderDescriptor
+	RunViewRequired bool
+}
+
+// RunViewGateway projects one already-accepted run into a replaceable native
+// view. The canonical result log remains authoritative.
+type RunViewGateway interface {
+	Open(context.Context, Request) (*RunView, error)
+}
+
+type RunView struct {
+	Policy          string
+	Provider        ProviderDescriptor
+	NativeSessionID string
+}
+
+func (v RunView) Validate() error {
+	if v.Policy != "required" {
+		return errors.New("run view policy must be required")
+	}
+	if err := v.Provider.Validate(); err != nil {
+		return fmt.Errorf("run view provider: %w", err)
+	}
+	if strings.TrimSpace(v.NativeSessionID) == "" {
+		return errors.New("run view native_session_id is required")
+	}
+	return nil
 }
 
 type Emit func(Output) error
@@ -89,6 +115,17 @@ type ProviderDependencyDescriptor struct {
 }
 
 func (d ProviderDescriptor) Validate() error {
+	return d.validate(false)
+}
+
+// ValidatePersisted accepts the unnamed dependency evidence emitted before
+// dependency names became part of result.v1. New provider preparation remains
+// strict through Validate.
+func (d ProviderDescriptor) ValidatePersisted() error {
+	return d.validate(true)
+}
+
+func (d ProviderDescriptor) validate(allowLegacyUnnamed bool) error {
 	for field, value := range map[string]string{"capability_id": d.CapabilityID, "provider_id": d.ProviderID, "contract_version": d.ContractVersion, "deployment_id": d.DeploymentID, "provider_kind": d.ProviderKind, "integrity_digest": d.IntegrityDigest} {
 		if strings.TrimSpace(value) == "" {
 			return fmt.Errorf("%s is required", field)
@@ -99,8 +136,11 @@ func (d ProviderDescriptor) Validate() error {
 	}
 	seenDependencies := map[string]struct{}{}
 	for index, dependency := range d.Dependencies {
-		if err := dependency.Validate(); err != nil {
+		if err := dependency.validate(allowLegacyUnnamed); err != nil {
 			return fmt.Errorf("dependency %d: %w", index+1, err)
+		}
+		if dependency.Name == "" {
+			continue
 		}
 		if _, duplicate := seenDependencies[dependency.Name]; duplicate {
 			return fmt.Errorf("duplicate provider dependency name %q", dependency.Name)
@@ -111,10 +151,20 @@ func (d ProviderDescriptor) Validate() error {
 }
 
 func (d ProviderDependencyDescriptor) Validate() error {
-	for field, value := range map[string]string{"name": d.Name, "provider_id": d.ProviderID, "contract_version": d.ContractVersion, "deployment_id": d.DeploymentID, "provider_kind": d.ProviderKind, "integrity_digest": d.IntegrityDigest} {
+	return d.validate(false)
+}
+
+func (d ProviderDependencyDescriptor) validate(allowLegacyUnnamed bool) error {
+	for field, value := range map[string]string{"provider_id": d.ProviderID, "contract_version": d.ContractVersion, "deployment_id": d.DeploymentID, "provider_kind": d.ProviderKind, "integrity_digest": d.IntegrityDigest} {
 		if strings.TrimSpace(value) == "" {
 			return fmt.Errorf("%s is required", field)
 		}
+	}
+	if strings.TrimSpace(d.Name) == "" {
+		if allowLegacyUnnamed {
+			return validateOptionalDigest(d.ConfigurationDigest)
+		}
+		return errors.New("name is required")
 	}
 	if !validDependencyName(d.Name) {
 		return errors.New("name is invalid")

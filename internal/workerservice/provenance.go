@@ -43,6 +43,14 @@ func loadRegistryForWorld(profile hqprofile.Profile, world *core.JsonlWorld) (*a
 	return adapter.NewRegistry(registrations...)
 }
 
+func loadRunViewGateway(profile hqprofile.Profile, world *core.JsonlWorld) adapter.RunViewGateway {
+	if world == nil || len(world.LocalTools) == 0 || profile.ExecutableBindingsPath == "" {
+		return nil
+	}
+	preparer := localtool.Preparer{World: world, BindingsPath: profile.ExecutableBindingsPath}
+	return localtool.RunViewGateway{Preparer: preparer, EventsPath: profile.EventsPath}
+}
+
 // validateSelectedWorldRows converts provenance mismatch into the normal typed
 // per-row validation path. Rows without provenance remain legacy-compatible but
 // make no selected-world or history claim.

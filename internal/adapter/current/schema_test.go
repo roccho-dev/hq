@@ -122,6 +122,31 @@ func TestLocalToolFirstChildRejectsUnimplementedLifecycleAndApproval(t *testing.
 	}
 }
 
+func TestLocalToolLoadsRequiredRunViewAndFinalSelectorStrictly(t *testing.T) {
+	row := strings.Replace(validLocalTool, `"output":{"format":"text"}`, `"output":{"format":"jsonl","final":{"source":"stdout","path":["result"]}},"run_view":{"policy":"required","tool_id":"herdr","tool_version":"1","action_id":"run-view.open"}`, 1)
+	viewer := `{"kind":"hq.local-tool.v1","tool_id":"herdr","tool_version":"1","binding_ref":"local-tool.herdr","binding_contract_version":"2","actions":[{"action_id":"run-view.open","inputs":[{"name":"view_id","type":"string","required":true},{"name":"run_id","type":"string","required":true},{"name":"events_path","type":"string","required":true}],"argv":[{"literal":"agent"}],"stdin":{"mode":"none","max_bytes":0},"limits":{"timeout_ms":1000,"stdout_bytes":4096,"stderr_bytes":4096},"output":{"format":"json"},"native_refs":{"session":{"source":"stdout","path":["result","agent","terminal_id"]}},"lifecycle":"one-shot","risk":"low","approval":"explicit"}]}`
+	world, err := LoadSchemaJSONL(strings.NewReader(row + "\n" + viewer))
+	if err != nil {
+		t.Fatal(err)
+	}
+	action := world.LocalTools[0].Actions[0]
+	if action.RunView == nil || action.RunView.Policy != "required" || action.Output.Final == nil || action.Output.Final.Path[0] != "result" {
+		t.Fatalf("action=%+v", action)
+	}
+
+	for name, invalid := range map[string]string{
+		"optional-view": strings.Replace(row, `"policy":"required"`, `"policy":"optional"`, 1),
+		"text-final":    strings.Replace(row, `"format":"jsonl"`, `"format":"text"`, 1),
+		"empty-view-id": strings.Replace(row, `"tool_id":"herdr"`, `"tool_id":""`, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := LoadSchemaJSONL(strings.NewReader(invalid + "\n" + viewer)); err == nil {
+				t.Fatalf("loader accepted invalid run-view contract: %s", invalid)
+			}
+		})
+	}
+}
+
 func TestLocalToolWorldIsIndependentOfRecordOrder(t *testing.T) {
 	first, err := LoadSchemaJSONL(strings.NewReader(validLocalToolCommand + "\n" + secondLocalTool + "\n" + validLocalTool))
 	if err != nil {

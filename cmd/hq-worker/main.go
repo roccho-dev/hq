@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
 	"time"
 
@@ -36,6 +37,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return runShow(args[1:], stdout, stderr)
 		case "tail":
 			return runTail(args[1:], stdout, stderr)
+		case "view":
+			return runView(args[1:], stdout, stderr)
 		}
 	}
 	return runWorker(args, stdout, stderr)
@@ -298,6 +301,53 @@ func runTail(args []string, stdout, stderr io.Writer) int {
 	return 2
 }
 
+func runView(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("hq-worker view", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	events := flags.String("events", defaultEventPath, "canonical result.v1 event JSONL path")
+	runID := flags.String("run", "", "run id to reconstruct and follow")
+	follow := flags.Bool("follow", true, "wait for newly appended rows until terminal state")
+	hold := flags.Bool("hold", false, "retain the terminal view until the pane is explicitly closed")
+	poll := flags.Duration("poll", 250*time.Millisecond, "bounded durable-log rescan interval")
+	timeout := flags.Duration("timeout", 0, "optional maximum follow duration")
+	if err := flags.Parse(args); err != nil {
+		return 1
+	}
+	if flags.NArg() != 0 || strings.TrimSpace(*runID) == "" || *poll <= 0 || *timeout < 0 {
+		writeCommandError(stderr, "invalid_arguments", "view requires --run, positive --poll, and non-negative --timeout")
+		return 1
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	cancel := func() {}
+	if *timeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, *timeout)
+	}
+	defer cancel()
+	fmt.Fprintf(stdout, "HQ run %s\n\n", *runID)
+	err := worker.FollowRun(ctx, *events, *runID, *follow, *poll, func(row worker.ResultRow) error {
+		printViewEvent(stdout, row)
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			writeCommandError(stderr, "view_timeout", "view reached its configured timeout before terminal state")
+			return 2
+		}
+		if errors.Is(err, context.Canceled) {
+			return 0
+		}
+		writeObservationError(stderr, err)
+		return 2
+	}
+	if !*hold {
+		return 0
+	}
+	fmt.Fprintln(stdout, "\nView retained. Close this pane to dismiss it.")
+	<-ctx.Done()
+	return 0
+}
+
 func readWorkerRows(inputPath, inputFormat string) ([]worker.ReadRow, error) {
 	file, err := os.Open(inputPath)
 	if err != nil {
@@ -424,6 +474,29 @@ func printEventText(w io.Writer, row worker.ResultRow) {
 	}
 	detail = strings.Join(strings.Fields(detail), " ")
 	fmt.Fprintf(w, "%s\t%d\t%s\t%s\n", row.RecordedAt.Format(time.RFC3339Nano), row.Seq, row.Kind, detail)
+}
+
+func printViewEvent(w io.Writer, row worker.ResultRow) {
+	at := row.RecordedAt.Format(time.RFC3339)
+	switch row.Kind {
+	case worker.ResultAccepted:
+		fmt.Fprintf(w, "[%s] queued\n", at)
+	case worker.ResultStarted:
+		fmt.Fprintf(w, "[%s] running\n", at)
+	case worker.ResultCompleted:
+		fmt.Fprintf(w, "[%s] completed\n", at)
+		if row.Final != nil && row.Final.Text != "" {
+			fmt.Fprintf(w, "\n%s\n", row.Final.Text)
+		}
+		if row.Final != nil && row.Final.Path != "" {
+			fmt.Fprintf(w, "\nartifact: %s\n", row.Final.Path)
+		}
+	case worker.ResultFailed, worker.ResultBlocked, worker.ResultTimeout, worker.ResultCancelled:
+		fmt.Fprintf(w, "[%s] %s\n", at, row.Kind)
+		if row.Error != nil {
+			fmt.Fprintf(w, "\n%s: %s\n", row.Error.Code, row.Error.Message)
+		}
+	}
 }
 
 func writeObservationError(w io.Writer, err error) {

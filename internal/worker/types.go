@@ -132,6 +132,12 @@ type ProviderDependencyEvidence struct {
 	IntegrityDigest     string `json:"integrity_digest"`
 	ConfigurationDigest string `json:"configuration_digest,omitempty"`
 }
+type RunViewEvidence struct {
+	Version         string           `json:"version"`
+	Policy          string           `json:"policy"`
+	Provider        ProviderEvidence `json:"provider"`
+	NativeSessionID string           `json:"native_session_id"`
+}
 type ResultRow struct {
 	EventID         string            `json:"event_id"`
 	Version         string            `json:"version"`
@@ -146,6 +152,7 @@ type ResultRow struct {
 	Error           *ResultError      `json:"error,omitempty"`
 	NativeSessionID *string           `json:"native_session_id,omitempty"`
 	Provider        *ProviderEvidence `json:"provider,omitempty"`
+	View            *RunViewEvidence  `json:"view,omitempty"`
 }
 type LogEntry struct {
 	Validation *ValidationRow
