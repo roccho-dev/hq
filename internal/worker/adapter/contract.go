@@ -29,8 +29,34 @@ func (f PreparerFunc) Prepare(ctx context.Context, request Request) (Prepared, e
 // Prepared binds the exact transient adapter and verified provider selected
 // for one request. Provider may be nil only for legacy/static registrations.
 type Prepared struct {
-	Adapter  Adapter
-	Provider *ProviderDescriptor
+	Adapter         Adapter
+	Provider        *ProviderDescriptor
+	RunViewRequired bool
+}
+
+// RunViewGateway projects one already-accepted run into a replaceable native
+// view. The canonical result log remains authoritative.
+type RunViewGateway interface {
+	Open(context.Context, Request) (*RunView, error)
+}
+
+type RunView struct {
+	Policy          string
+	Provider        ProviderDescriptor
+	NativeSessionID string
+}
+
+func (v RunView) Validate() error {
+	if v.Policy != "required" {
+		return errors.New("run view policy must be required")
+	}
+	if err := v.Provider.Validate(); err != nil {
+		return fmt.Errorf("run view provider: %w", err)
+	}
+	if strings.TrimSpace(v.NativeSessionID) == "" {
+		return errors.New("run view native_session_id is required")
+	}
+	return nil
 }
 
 type Emit func(Output) error

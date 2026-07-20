@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"hq/internal/worker/adapter"
 	"hq/internal/workersafety"
+	"strings"
 	"time"
 )
 
@@ -14,6 +15,7 @@ type EntryAppender interface{ Append(LogEntry) error }
 type Runner struct {
 	Engine    Engine
 	Registry  *adapter.Registry
+	Views     adapter.RunViewGateway
 	Approvals ApprovalStore
 	Now       func() time.Time
 }
@@ -160,10 +162,46 @@ func (r Runner) Process(ctx context.Context, rows []ReadRow, prior LogData, repl
 			unsuccessful++
 			continue
 		}
+		var runView *adapter.RunView
+		if !recovering && prepared.RunViewRequired {
+			if r.Views == nil {
+				if err := appendEntry(ResultEntry(blockedResult(runID, row.Instruction, seq, clock(), "view_unavailable", "required run view gateway is unavailable", false))); err != nil {
+					return emitted, unsuccessful, err
+				}
+				unsuccessful++
+				continue
+			}
+			runView, resolveErr = r.Views.Open(ctx, request)
+			if resolveErr != nil || runView == nil {
+				message := "required run view could not be opened"
+				if resolveErr != nil && strings.TrimSpace(resolveErr.Error()) != "" {
+					message = resolveErr.Error()
+				}
+				if err := appendEntry(ResultEntry(blockedResult(runID, row.Instruction, seq, clock(), "view_unavailable", message, false))); err != nil {
+					return emitted, unsuccessful, err
+				}
+				unsuccessful++
+				continue
+			}
+			if err := runView.Validate(); err != nil {
+				if appendErr := appendEntry(ResultEntry(blockedResult(runID, row.Instruction, seq, clock(), "view_unavailable", err.Error(), false))); appendErr != nil {
+					return emitted, unsuccessful, appendErr
+				}
+				unsuccessful++
+				continue
+			}
+		}
 		if !recovering {
 			started := ResultRow{EventID: makeEventID(runID, seq), Version: ResultVersionV1, RunID: runID, InstructionID: row.Instruction.ID, Target: row.Instruction.Target, Kind: ResultStarted, Seq: seq, RecordedAt: clock()}
 			if prepared.Provider != nil {
 				started.Provider = providerEvidence(*prepared.Provider, request.IdempotencyKey)
+			}
+			if runView != nil {
+				started.View = &RunViewEvidence{
+					Version: RunViewVersionV1, Policy: runView.Policy,
+					Provider:        *providerEvidence(runView.Provider, ""),
+					NativeSessionID: runView.NativeSessionID,
+				}
 			}
 			if err := appendEntry(ResultEntry(started)); err != nil {
 				return emitted, unsuccessful, err

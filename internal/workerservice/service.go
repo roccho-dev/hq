@@ -207,6 +207,7 @@ func processOnceSelected(ctx context.Context, profile hqprofile.Profile, world *
 		return StateEvidenceInvalid, err
 	}
 	runner := worker.NewRunner(profile.WorkspaceRoot, registry, approvals)
+	runner.Views = loadRunViewGateway(profile, world)
 	if _, _, err := runner.Process(ctx, pending, prior, false, worker.NewEventLog(profile.EventsPath)); err != nil {
 		return StateEvidenceInvalid, err
 	}

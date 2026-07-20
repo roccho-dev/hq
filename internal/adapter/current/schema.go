@@ -103,6 +103,9 @@ func LoadSchemaJSONL(r io.Reader) (*core.JsonlWorld, error) {
 	if err := validateLocalToolCommands(world); err != nil {
 		return nil, err
 	}
+	if err := validateRunViewReferences(world); err != nil {
+		return nil, err
+	}
 	return world, nil
 }
 
@@ -353,12 +356,32 @@ func validateLocalToolActionWithBindings(action core.LocalToolAction, bindings m
 	default:
 		return fmt.Errorf("unsupported output format %q", action.Output.Format)
 	}
+	if action.Output.Final != nil {
+		if action.Output.Format == "text" {
+			return errors.New("final output selector requires json or jsonl output")
+		}
+		if err := validateNativeSelector(*action.Output.Final); err != nil {
+			return fmt.Errorf("output.final: %w", err)
+		}
+	}
 	if action.NativeRefs.Session != nil {
 		if action.Output.Format == "text" {
 			return errors.New("native session selector requires json or jsonl output")
 		}
 		if err := validateNativeSelector(*action.NativeRefs.Session); err != nil {
 			return fmt.Errorf("native_refs.session: %w", err)
+		}
+	}
+	if action.RunView != nil {
+		if action.RunView.Policy != "required" {
+			return errors.New("run_view.policy must be required")
+		}
+		for field, value := range map[string]string{
+			"tool_id": action.RunView.ToolID, "tool_version": action.RunView.ToolVersion, "action_id": action.RunView.ActionID,
+		} {
+			if !validLocalToolName(value) {
+				return fmt.Errorf("run_view.%s is invalid", field)
+			}
 		}
 	}
 	switch action.Lifecycle {
@@ -550,6 +573,39 @@ func validateLocalToolCommands(world *core.JsonlWorld) error {
 		for _, definition := range action.Inputs {
 			if definition.Required && !provided[definition.Name] {
 				return fmt.Errorf("command %q does not provide required action input %q", command.Name, definition.Name)
+			}
+		}
+	}
+	return nil
+}
+
+func validateRunViewReferences(world *core.JsonlWorld) error {
+	requiredInputs := map[string]bool{"view_id": true, "run_id": true, "events_path": true}
+	for _, tool := range world.LocalTools {
+		for _, action := range tool.Actions {
+			if action.RunView == nil {
+				continue
+			}
+			viewTool, ok := world.LocalTool(action.RunView.ToolID, action.RunView.ToolVersion)
+			if !ok {
+				return fmt.Errorf("local tool %q action %q references unknown run view tool %q version %q", tool.ToolID, action.ActionID, action.RunView.ToolID, action.RunView.ToolVersion)
+			}
+			viewAction, ok := localToolAction(viewTool, action.RunView.ActionID)
+			if !ok {
+				return fmt.Errorf("local tool %q action %q references unknown run view action %q", tool.ToolID, action.ActionID, action.RunView.ActionID)
+			}
+			if viewAction.RunView != nil {
+				return fmt.Errorf("run view action %q must not declare another run view", viewAction.ActionID)
+			}
+			seen := map[string]bool{}
+			for _, input := range viewAction.Inputs {
+				if !requiredInputs[input.Name] || input.Type != "string" || !input.Required {
+					return fmt.Errorf("run view action %q inputs must be exactly required strings view_id, run_id, and events_path", viewAction.ActionID)
+				}
+				seen[input.Name] = true
+			}
+			if len(seen) != len(requiredInputs) {
+				return fmt.Errorf("run view action %q inputs must be exactly required strings view_id, run_id, and events_path", viewAction.ActionID)
 			}
 		}
 	}

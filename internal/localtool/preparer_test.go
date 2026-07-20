@@ -45,6 +45,8 @@ func TestLocalToolHelperProcess(t *testing.T) {
 		_, _ = io.WriteString(os.Stdout, `{broken`)
 	case "jsonl":
 		_, _ = io.WriteString(os.Stdout, "{\"session\":\"session-1\"}\n{\"session\":\"session-2\"}\n")
+	case "finaljsonl":
+		_, _ = io.WriteString(os.Stdout, "{\"type\":\"progress\",\"message\":\"raw-progress\"}\n{\"session\":\"session-final\",\"result\":\"compact final\"}\n")
 	case "badjsonl":
 		_, _ = io.WriteString(os.Stdout, "{\"value\":1}\nnope\n")
 	case "stdout":
@@ -252,6 +254,27 @@ func TestPreparedAdapterValidatesJSONJSONLAndNativeReferences(t *testing.T) {
 	prepared = prepare(t, missing, registryPath, nil)
 	_, err = prepared.Adapter.Run(context.Background(), requestFor(missing, nil), nil)
 	assertFailureCode(t, err, "local_tool_native_reference_missing")
+}
+
+func TestPreparedAdapterSelectsCompactFinalFromLastJSONLRecord(t *testing.T) {
+	_, registryPath := executableBindingFixture(t, "local-tool.dummy", "1", "app.dummy")
+	tool := helperTool("finaljsonl", "jsonl")
+	tool.Actions[0].Output.Final = &core.LocalToolNativeSelector{Source: "stdout", Path: []string{"result"}}
+	tool.Actions[0].NativeRefs.Session = &core.LocalToolNativeSelector{Source: "stdout", Path: []string{"session"}}
+	prepared := prepare(t, tool, registryPath, nil)
+	completion, err := prepared.Adapter.Run(context.Background(), requestFor(tool, nil), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completion.FinalText != "compact final" || completion.NativeSessionID == nil || *completion.NativeSessionID != "session-final" {
+		t.Fatalf("completion=%+v", completion)
+	}
+
+	missing := tool
+	missing.Actions[0].Output.Final = &core.LocalToolNativeSelector{Source: "stdout", Path: []string{"missing"}}
+	prepared = prepare(t, missing, registryPath, nil)
+	_, err = prepared.Adapter.Run(context.Background(), requestFor(missing, nil), nil)
+	assertFailureCode(t, err, "local_tool_final_output_missing")
 }
 
 func TestVerifiedBindingRejectsPoisonedRegistryEntries(t *testing.T) {
