@@ -62,9 +62,11 @@ type runViewRecord struct {
 }
 
 type runViewContent struct {
-	Lifecycle string          `json:"lifecycle"`
-	Final     *runViewFinal   `json:"final,omitempty"`
-	Failure   *runViewFailure `json:"failure,omitempty"`
+	Lifecycle     string          `json:"lifecycle"`
+	Text          string          `json:"text,omitempty"`
+	TextTruncated bool            `json:"text_truncated,omitempty"`
+	Final         *runViewFinal   `json:"final,omitempty"`
+	Failure       *runViewFailure `json:"failure,omitempty"`
 }
 
 type runViewOperationReceipt struct {
@@ -158,7 +160,7 @@ func runRunView(args []string, stdout, stderr io.Writer) int {
 	}
 	selection, err := selectRunView(*runID, environment)
 	if err != nil {
-		writeCommandError(stderr, "run_not_found", err.Error())
+		writeCommandError(stderr, runViewSelectionErrorCode(err), err.Error())
 		return 2
 	}
 	if selection.Failure != nil || selection.Policy == "none" {
@@ -178,10 +180,7 @@ func runRunView(args []string, stdout, stderr io.Writer) int {
 
 	switch operation {
 	case "read":
-		if _, _, failure := prepareRunViewOperation(ctx, preparer, selection, environment.Profile, "open", *maxBytes, false); failure != nil {
-			return emitRunViewNonGreen(stdout, operation, selection, failure)
-		}
-		return emitRunViewRead(stdout, selection, *maxBytes)
+		return executeRunViewOperation(ctx, stdout, operation, preparer, selection, environment.Profile, *maxBytes)
 	case "tail":
 		if _, _, failure := prepareRunViewOperation(ctx, preparer, selection, environment.Profile, "open", *maxBytes, *follow); failure != nil {
 			return emitRunViewNonGreen(stdout, operation, selection, failure)
@@ -192,6 +191,14 @@ func runRunView(args []string, stdout, stderr io.Writer) int {
 	default:
 		panic("validated run-view operation was not handled")
 	}
+}
+
+func runViewSelectionErrorCode(err error) string {
+	var observationError *worker.ObservationError
+	if errors.As(err, &observationError) && observationError.Code == "run_not_found" {
+		return "run_not_found"
+	}
+	return "view_evidence_invalid"
 }
 
 func loadRunViewEnvironment(profileName, profileRoot string) (runViewEnvironment, error) {
@@ -370,9 +377,6 @@ func prepareRunViewOperation(ctx context.Context, preparer runViewPreparer, sele
 	if selection.Policy == "none" || selection.OpenActionID == "" {
 		return workeradapter.Request{}, workeradapter.Prepared{}, &runViewFailure{Code: "view_unavailable", Message: "the selected run has no finite view provider plan"}
 	}
-	if (operation == "focus" || operation == "close") && strings.TrimSpace(selection.NativeSessionID) == "" {
-		return workeradapter.Request{}, workeradapter.Prepared{}, &runViewFailure{Code: "view_reference_stale", Message: "the canonical run has no current native view reference"}
-	}
 	actionID := runViewOperationActionID(selection.OpenActionID, operation)
 	if actionID == "" {
 		return workeradapter.Request{}, workeradapter.Prepared{}, &runViewFailure{Code: "view_operation_unavailable", Message: fmt.Sprintf("the selected view plan does not define %s", operation)}
@@ -466,27 +470,25 @@ func executeRunViewOperation(ctx context.Context, stdout io.Writer, operation st
 		InstructionID: selection.Instruction.ID, Lifecycle: selection.Detail.Run.Status, Policy: selection.Policy,
 		Status: operation + "ed", ViewReference: viewReference,
 	}
+	if operation == "read" {
+		content, truncated := boundedString(completion.FinalText, maxBytes)
+		receipt.Status = "read"
+		receipt.Content = &runViewContent{
+			Lifecycle: selection.Detail.Run.Status, Text: content, TextTruncated: truncated,
+			Final: boundedFinal(selection.Detail.Final, maxBytes),
+		}
+		if selection.Detail.Error != nil {
+			receipt.Content.Failure = &runViewFailure{
+				Code: selection.Detail.Error.Code, Message: boundedText(selection.Detail.Error.Message, maxBytes),
+			}
+		}
+	}
 	if operation == "focus" {
 		receipt.Status = "focused"
 	}
 	if operation == "close" {
 		receipt.Status = "closed"
 		receipt.ViewReference = ""
-	}
-	if err := worker.EncodeJSONLine(stdout, receipt); err != nil {
-		return 1
-	}
-	return 0
-}
-
-func emitRunViewRead(stdout io.Writer, selection runViewSelection, maxBytes int) int {
-	receipt := runViewOperationReceipt{
-		Version: runViewProjectionVersion, Operation: "read", RunID: selection.RunID, ViewID: selection.ViewID,
-		InstructionID: selection.Instruction.ID, Lifecycle: selection.Detail.Run.Status, Policy: selection.Policy, Status: "read",
-		Content: &runViewContent{Lifecycle: selection.Detail.Run.Status, Final: boundedFinal(selection.Detail.Final, maxBytes)},
-	}
-	if selection.Detail.Error != nil {
-		receipt.Content.Failure = &runViewFailure{Code: selection.Detail.Error.Code, Message: boundedText(selection.Detail.Error.Message, maxBytes)}
 	}
 	if err := worker.EncodeJSONLine(stdout, receipt); err != nil {
 		return 1
