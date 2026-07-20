@@ -289,14 +289,10 @@ func selectRunView(runID string, environment runViewEnvironment) (runViewSelecti
 		return selection, nil
 	}
 	if action.RunView == nil {
-		selection.Policy = instructionOptionalViewPolicy(instruction)
-		if selection.Policy == "optional" {
-			selection.Failure = &runViewFailure{Code: "view_unavailable", Message: "optional view policy has no selected provider plan"}
-		}
 		return selection, nil
 	}
 	selection.Policy = action.RunView.Policy
-	if selection.Policy != "required" && selection.Policy != "optional" {
+	if selection.Policy != "required" {
 		selection.Failure = &runViewFailure{Code: "view_policy_invalid", Message: fmt.Sprintf("unsupported view policy %q", selection.Policy)}
 		return selection, nil
 	}
@@ -312,19 +308,6 @@ func selectRunView(runID string, environment runViewEnvironment) (runViewSelecti
 	selection.ViewTool = viewTool
 	selection.OpenActionID = action.RunView.ActionID
 	return selection, nil
-}
-
-func instructionOptionalViewPolicy(instruction worker.Instruction) string {
-	if len(instruction.Policy) == 0 {
-		return "none"
-	}
-	var policy struct {
-		View string `json:"view"`
-	}
-	if err := json.Unmarshal(instruction.Policy, &policy); err == nil && policy.View == "optional" {
-		return "optional"
-	}
-	return "none"
 }
 
 func instructionByID(instructions []worker.Instruction, instructionID string) (worker.Instruction, bool) {

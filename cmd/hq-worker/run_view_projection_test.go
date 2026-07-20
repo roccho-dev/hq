@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	current "hq/internal/adapter/current"
 	"hq/internal/core"
 	"hq/internal/hqprofile"
 	"hq/internal/worker"
@@ -100,31 +99,6 @@ func TestRunViewReadExecutesOneFiniteProviderActionAndBoundsContent(t *testing.T
 	}
 }
 
-func TestRunViewSelectionSupportsLoadedOptionalPlanWithoutDispatch(t *testing.T) {
-	environment := runViewTestEnvironment("optional", "view.open", false)
-	worldRows := strings.Join([]string{
-		`{"kind":"hq.local-tool.v1","tool_id":"main","tool_version":"1","binding_ref":"local-tool.main","binding_contract_version":"1","actions":[{"action_id":"run","argv":[{"literal":"run"}],"stdin":{"mode":"none","max_bytes":0},"limits":{"timeout_ms":1000,"stdout_bytes":4096,"stderr_bytes":4096},"output":{"format":"json"},"run_view":{"policy":"optional","tool_id":"view","tool_version":"1","action_id":"view.open"},"lifecycle":"one-shot","risk":"low","approval":"explicit"}]}`,
-		`{"kind":"hq.local-tool.v1","tool_id":"view","tool_version":"1","binding_ref":"local-tool.view","binding_contract_version":"1","actions":[{"action_id":"view.open","inputs":[{"name":"view_id","type":"string","required":true},{"name":"run_id","type":"string","required":true},{"name":"events_path","type":"string","required":true}],"argv":[{"literal":"open"}],"stdin":{"mode":"none","max_bytes":0},"limits":{"timeout_ms":1000,"stdout_bytes":4096,"stderr_bytes":4096},"output":{"format":"json"},"lifecycle":"one-shot","risk":"low","approval":"explicit"}]}`,
-	}, "\n")
-	world, err := current.LoadSchemaJSONL(strings.NewReader(worldRows))
-	if err != nil {
-		t.Fatal(err)
-	}
-	environment.World = world
-	beforeInstructions, _ := json.Marshal(environment.Instructions)
-	beforeResults, _ := json.Marshal(environment.Results)
-	selection, err := selectRunView("run-1", environment)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if selection.Policy != "optional" || selection.Failure != nil || selection.OpenActionID != "view.open" {
-		t.Fatalf("selection=%+v", selection)
-	}
-	if string(beforeInstructions) != mustMarshalJSON(t, environment.Instructions) || string(beforeResults) != mustMarshalJSON(t, environment.Results) {
-		t.Fatal("loaded optional plan changed canonical evidence")
-	}
-}
-
 func TestRunViewSelectionCoversPolicyAndEvidenceFailures(t *testing.T) {
 	t.Run("none", func(t *testing.T) {
 		selection, err := selectRunView("run-1", runViewTestEnvironment("none", "view.open", false))
@@ -132,18 +106,6 @@ func TestRunViewSelectionCoversPolicyAndEvidenceFailures(t *testing.T) {
 			t.Fatal(err)
 		}
 		if selection.Policy != "none" || selection.Failure != nil || selection.OpenActionID != "" {
-			t.Fatalf("selection=%+v", selection)
-		}
-	})
-
-	t.Run("optional without selected plan", func(t *testing.T) {
-		environment := runViewTestEnvironment("none", "view.open", false)
-		environment.Instructions[0].Policy = json.RawMessage(`{"view":"optional"}`)
-		selection, err := selectRunView("run-1", environment)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if selection.Policy != "optional" || selection.Failure == nil || selection.Failure.Code != "view_unavailable" {
 			t.Fatalf("selection=%+v", selection)
 		}
 	})
