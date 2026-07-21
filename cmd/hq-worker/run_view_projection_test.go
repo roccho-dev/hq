@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +15,7 @@ import (
 
 	"hq/internal/core"
 	"hq/internal/hqprofile"
+	"hq/internal/localtool"
 	"hq/internal/worker"
 	workeradapter "hq/internal/worker/adapter"
 )
@@ -482,6 +485,81 @@ func TestRunViewRejectsStaleProviderBeforeEffectAndPreservesTypedProviderFailure
 			t.Fatal(err)
 		}
 		if receipt.Failure == nil || receipt.Failure.Code != "view_reference_stale" || len(adapter.requests) != 1 {
+			t.Fatalf("receipt=%+v executes=%d", receipt, len(adapter.requests))
+		}
+	})
+}
+
+func TestRunViewRevalidatesOpenActionDependencyAcrossFiniteOperations(t *testing.T) {
+	environment := runViewTestEnvironment("required", "view.open", true)
+	root := t.TempDir()
+	executable := filepath.Join(root, "view-helper")
+	contents := []byte("verified view helper")
+	if err := os.WriteFile(executable, contents, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	digest := fmt.Sprintf("sha256:%x", sha256.Sum256(contents))
+	binding := localtool.VerifiedBinding{
+		BindingRef: "local-tool.view-helper", ResourceID: "app.view-helper", ContractVersion: "1",
+		Executable: executable, MaterialDigest: digest, DeploymentID: "app.view-helper@1:" + digest,
+		DeclarationEventID: "view-helper-declared", SelectionEventID: "view-helper-selected",
+	}
+	registryPath := filepath.Join(root, "verified-executable-bindings.json")
+	registry, err := json.Marshal(localtool.VerifiedBindings{
+		Schema: localtool.VerifiedBindingsSchema, Entries: []localtool.VerifiedBinding{binding},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(registryPath, registry, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	environment.World.LocalTools[1].Bindings = []core.LocalToolBinding{{
+		Name: "view_helper", BindingRef: binding.BindingRef, BindingContractVersion: binding.ContractVersion,
+	}}
+	environment.Results[1].View.Provider.Dependencies = []worker.ProviderDependencyEvidence{{
+		Name: "view_helper", ProviderID: binding.BindingRef, ContractVersion: binding.ContractVersion,
+		DeploymentID: binding.DeploymentID, ProviderKind: "executable", IntegrityDigest: binding.MaterialDigest,
+	}}
+	selection, err := selectRunView("run-1", environment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := workeradapter.ProviderDescriptor{
+		CapabilityID: "local-tool:view@1/view.focus", ProviderID: "local-tool.view", ContractVersion: "1",
+		DeploymentID: "view@1", ProviderKind: "executable", IntegrityDigest: "sha256:" + strings.Repeat("0", 64),
+	}
+	profile := hqprofile.Profile{
+		WorkspaceRoot: "/workspace", EventsPath: "/events/events.jsonl", ExecutableBindingsPath: registryPath,
+	}
+
+	t.Run("matching open dependency remains valid", func(t *testing.T) {
+		adapter := &recordingRunViewAdapter{completion: workeradapter.Completion{FinalText: "focused"}}
+		preparer := &recordingRunViewPreparer{prepared: workeradapter.Prepared{Adapter: adapter, Provider: &provider}}
+		var output bytes.Buffer
+		if code := executeRunViewOperation(context.Background(), &output, "focus", preparer, selection, profile, 1024); code != 0 {
+			t.Fatalf("code=%d output=%q", code, output.String())
+		}
+		if len(adapter.requests) != 1 {
+			t.Fatalf("executes=%d", len(adapter.requests))
+		}
+	})
+
+	t.Run("drifted open dependency blocks before effect", func(t *testing.T) {
+		if err := os.WriteFile(executable, []byte("drifted view helper"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		adapter := &recordingRunViewAdapter{}
+		preparer := &recordingRunViewPreparer{prepared: workeradapter.Prepared{Adapter: adapter, Provider: &provider}}
+		var output bytes.Buffer
+		if code := executeRunViewOperation(context.Background(), &output, "focus", preparer, selection, profile, 1024); code != 2 {
+			t.Fatalf("code=%d output=%q", code, output.String())
+		}
+		var receipt runViewOperationReceipt
+		if err := json.Unmarshal(bytes.TrimSpace(output.Bytes()), &receipt); err != nil {
+			t.Fatal(err)
+		}
+		if receipt.Failure == nil || receipt.Failure.Code != "view_reference_stale" || len(adapter.requests) != 0 {
 			t.Fatalf("receipt=%+v executes=%d", receipt, len(adapter.requests))
 		}
 	})

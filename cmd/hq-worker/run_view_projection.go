@@ -457,10 +457,13 @@ func executeRunViewOperation(ctx context.Context, stdout io.Writer, operation st
 	if failure != nil {
 		return emitRunViewNonGreen(stdout, operation, selection, failure)
 	}
-	if operation != "open" && selection.Reference != nil && !sameRunViewProvider(selection.Reference.Provider, *prepared.Provider) {
-		return emitRunViewNonGreen(stdout, operation, selection, &runViewFailure{
-			Code: "view_reference_stale", Message: "canonical native view reference no longer matches the selected provider",
-		})
+	if operation != "open" && selection.Reference != nil {
+		if !sameRunViewProvider(selection.Reference.Provider, *prepared.Provider) ||
+			!sameRunViewDependencies(selection.Reference.Provider.Dependencies, selection.ViewTool, profile.ExecutableBindingsPath) {
+			return emitRunViewNonGreen(stdout, operation, selection, &runViewFailure{
+				Code: "view_reference_stale", Message: "canonical native view reference no longer matches the selected provider",
+			})
+		}
 	}
 	completion, err := prepared.Adapter.Run(ctx, request, nil)
 	if err != nil {
@@ -501,14 +504,29 @@ func sameRunViewProvider(reference worker.ProviderEvidence, selected workeradapt
 		reference.ProviderID != selected.ProviderID || reference.ContractVersion != selected.ContractVersion ||
 		reference.DeploymentID != selected.DeploymentID || reference.ProviderKind != selected.ProviderKind ||
 		reference.IntegrityDigest != selected.IntegrityDigest || reference.ConfigurationDigest != selected.ConfigurationDigest ||
-		reference.IdempotencyContract != selected.IdempotencyContract || len(reference.Dependencies) != len(selected.Dependencies) {
+		reference.IdempotencyContract != selected.IdempotencyContract {
 		return false
 	}
-	for index := range reference.Dependencies {
-		left, right := reference.Dependencies[index], selected.Dependencies[index]
-		if left.Name != right.Name || left.ProviderID != right.ProviderID || left.ContractVersion != right.ContractVersion ||
-			left.DeploymentID != right.DeploymentID || left.ProviderKind != right.ProviderKind ||
-			left.IntegrityDigest != right.IntegrityDigest || left.ConfigurationDigest != right.ConfigurationDigest {
+	return true
+}
+
+func sameRunViewDependencies(reference []worker.ProviderDependencyEvidence, tool core.LocalToolDefinition, bindingsPath string) bool {
+	for _, expected := range reference {
+		var declaration *core.LocalToolBinding
+		for index := range tool.Bindings {
+			if tool.Bindings[index].Name == expected.Name {
+				declaration = &tool.Bindings[index]
+				break
+			}
+		}
+		if declaration == nil {
+			return false
+		}
+		binding, err := localtool.LoadVerifiedBinding(bindingsPath, declaration.BindingRef, declaration.BindingContractVersion)
+		if err != nil || binding.VerifyExecutable() != nil ||
+			expected.ProviderID != binding.BindingRef || expected.ContractVersion != binding.ContractVersion ||
+			expected.DeploymentID != binding.DeploymentID || expected.ProviderKind != "executable" ||
+			expected.IntegrityDigest != binding.MaterialDigest || expected.ConfigurationDigest != binding.ConfigurationDigest {
 			return false
 		}
 	}
