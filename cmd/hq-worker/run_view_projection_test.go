@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -55,6 +56,43 @@ func TestRunViewSelectionUsesOnlyCanonicalBoundedEvidence(t *testing.T) {
 	afterResults, _ := json.Marshal(environment.Results)
 	if !bytes.Equal(beforeInstructions, afterInstructions) || !bytes.Equal(beforeResults, afterResults) {
 		t.Fatal("read projection changed canonical instructions or result evidence")
+	}
+}
+
+func TestRunViewListLoadsSelectedProfileWorld(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	eventsDir := filepath.Join(workspace, ".hq", "events")
+	if err := os.MkdirAll(eventsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	worldPath := filepath.Join(root, "world.jsonl")
+	acceptedPath := filepath.Join(root, "accepted.jsonl")
+	eventsPath := filepath.Join(eventsDir, "events.jsonl")
+	world := strings.Join([]string{
+		`{"kind":"hq.world.v1","world_id":"world.run-view-profile-test"}`,
+		`{"key":"op","type":"string","required":true}`,
+	}, "\n") + "\n"
+	for path, content := range map[string]string{worldPath: world, acceptedPath: "", eventsPath: ""} {
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	profile := hqprofile.Profile{
+		Kind: hqprofile.Kind, Name: "local", DeploymentID: "dep-run-view-profile-test",
+		WorldPath: worldPath, AcceptedPath: acceptedPath, WorkspaceRoot: workspace, EventsPath: eventsPath,
+		PollIntervalMS: 50, HealthTimeoutMS: 500,
+	}
+	encoded, err := json.Marshal(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "local.json"), encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := runRunView([]string{"list", "--profile", "local", "--profile-root", root}, &stdout, &stderr); code != 0 {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
 
@@ -364,6 +402,89 @@ func TestRunViewDestroyedSameProviderFailsClosedWithoutFallback(t *testing.T) {
 	if string(beforeInstructions) != mustMarshalJSON(t, environment.Instructions) || string(beforeResults) != mustMarshalJSON(t, environment.Results) {
 		t.Fatal("destroyed-view failures changed canonical evidence")
 	}
+}
+
+func TestRunViewUsesOptionalNativeHintOnlyAfterProviderMatch(t *testing.T) {
+	environment := runViewTestEnvironment("required", "view.open", true)
+	environment.World.LocalTools[1].Actions[1].Inputs = append(
+		environment.World.LocalTools[1].Actions[1].Inputs,
+		core.LocalToolInput{Name: "native_session_id", Type: "string"},
+	)
+	selection, err := selectRunView("run-1", environment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := workeradapter.ProviderDescriptor{
+		CapabilityID: "local-tool:view@1/view.focus", ProviderID: "local-tool.view", ContractVersion: "1",
+		DeploymentID: "view@1", ProviderKind: "executable", IntegrityDigest: "sha256:" + strings.Repeat("0", 64),
+	}
+	adapter := &recordingRunViewAdapter{completion: workeradapter.Completion{FinalText: "focused"}}
+	preparer := &recordingRunViewPreparer{prepared: workeradapter.Prepared{Adapter: adapter, Provider: &provider}}
+	var output bytes.Buffer
+	code := executeRunViewOperation(
+		context.Background(), &output, "focus", preparer, selection,
+		hqprofile.Profile{WorkspaceRoot: "/workspace", EventsPath: "/events/events.jsonl"}, 1024,
+	)
+	if code != 0 || len(adapter.requests) != 1 {
+		t.Fatalf("code=%d output=%q executes=%d", code, output.String(), len(adapter.requests))
+	}
+	var payload runViewLocalToolPayload
+	if err := json.Unmarshal(adapter.requests[0].Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if string(payload.Input["native_session_id"]) != `"native-1"` {
+		t.Fatalf("payload=%s", adapter.requests[0].Payload)
+	}
+	assertRunViewPublicJSONShape(t, output.Bytes())
+}
+
+func TestRunViewRejectsStaleProviderBeforeEffectAndPreservesTypedProviderFailure(t *testing.T) {
+	environment := runViewTestEnvironment("required", "view.open", true)
+	selection, err := selectRunView("run-1", environment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := hqprofile.Profile{WorkspaceRoot: "/workspace", EventsPath: "/events/events.jsonl"}
+
+	t.Run("provider mismatch", func(t *testing.T) {
+		provider := workeradapter.ProviderDescriptor{
+			CapabilityID: "local-tool:view@1/view.focus", ProviderID: "local-tool.view", ContractVersion: "1",
+			DeploymentID: "view@1", ProviderKind: "executable", IntegrityDigest: "sha256:" + strings.Repeat("1", 64),
+		}
+		adapter := &recordingRunViewAdapter{}
+		preparer := &recordingRunViewPreparer{prepared: workeradapter.Prepared{Adapter: adapter, Provider: &provider}}
+		var output bytes.Buffer
+		if code := executeRunViewOperation(context.Background(), &output, "focus", preparer, selection, profile, 1024); code != 2 {
+			t.Fatalf("code=%d output=%q", code, output.String())
+		}
+		var receipt runViewOperationReceipt
+		if err := json.Unmarshal(bytes.TrimSpace(output.Bytes()), &receipt); err != nil {
+			t.Fatal(err)
+		}
+		if receipt.Failure == nil || receipt.Failure.Code != "view_reference_stale" || len(adapter.requests) != 0 {
+			t.Fatalf("receipt=%+v executes=%d", receipt, len(adapter.requests))
+		}
+	})
+
+	t.Run("provider reports stale native session", func(t *testing.T) {
+		provider := workeradapter.ProviderDescriptor{
+			CapabilityID: "local-tool:view@1/view.focus", ProviderID: "local-tool.view", ContractVersion: "1",
+			DeploymentID: "view@1", ProviderKind: "executable", IntegrityDigest: "sha256:" + strings.Repeat("0", 64),
+		}
+		adapter := &recordingRunViewAdapter{err: workeradapter.NewBlockedError("view_reference_stale", "native view no longer exists")}
+		preparer := &recordingRunViewPreparer{prepared: workeradapter.Prepared{Adapter: adapter, Provider: &provider}}
+		var output bytes.Buffer
+		if code := executeRunViewOperation(context.Background(), &output, "focus", preparer, selection, profile, 1024); code != 2 {
+			t.Fatalf("code=%d output=%q", code, output.String())
+		}
+		var receipt runViewOperationReceipt
+		if err := json.Unmarshal(bytes.TrimSpace(output.Bytes()), &receipt); err != nil {
+			t.Fatal(err)
+		}
+		if receipt.Failure == nil || receipt.Failure.Code != "view_reference_stale" || len(adapter.requests) != 1 {
+			t.Fatalf("receipt=%+v executes=%d", receipt, len(adapter.requests))
+		}
+	})
 }
 
 func TestRunViewCloseOpenThenFocusReadCloseUsesStableGenericViewID(t *testing.T) {

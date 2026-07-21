@@ -7,15 +7,14 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"time"
 	"unicode/utf8"
 
-	current "hq/internal/adapter/current"
 	"hq/internal/core"
 	"hq/internal/hqprofile"
 	"hq/internal/localtool"
+	"hq/internal/selectedworld"
 	"hq/internal/worker"
 	workeradapter "hq/internal/worker/adapter"
 )
@@ -101,6 +100,7 @@ type runViewSelection struct {
 	Detail       worker.RunDetail
 	ViewTool     core.LocalToolDefinition
 	OpenActionID string
+	Reference    *worker.RunViewEvidence
 	Failure      *runViewFailure
 }
 
@@ -204,12 +204,7 @@ func loadRunViewEnvironment(profileName, profileRoot string) (runViewEnvironment
 	if err != nil {
 		return runViewEnvironment{}, err
 	}
-	worldFile, err := os.Open(profile.WorldPath)
-	if err != nil {
-		return runViewEnvironment{}, err
-	}
-	defer worldFile.Close()
-	world, err := current.LoadSchemaJSONL(worldFile)
+	selection, err := selectedworld.Load(profile.WorldPath)
 	if err != nil {
 		return runViewEnvironment{}, err
 	}
@@ -220,7 +215,7 @@ func loadRunViewEnvironment(profileName, profileRoot string) (runViewEnvironment
 	if len(sourceDiagnostics) != 0 {
 		return runViewEnvironment{}, fmt.Errorf("canonical accepted instructions contain %d diagnostic(s)", len(sourceDiagnostics))
 	}
-	return runViewEnvironment{Profile: profile, World: world, Instructions: instructions, Results: results}, nil
+	return runViewEnvironment{Profile: profile, World: selection.World, Instructions: instructions, Results: results}, nil
 }
 
 func listRunViews(ctx context.Context, stdout, stderr io.Writer, environment runViewEnvironment, preparer runViewPreparer, limit, maxBytes int) int {
@@ -261,7 +256,10 @@ func selectRunView(runID string, environment runViewEnvironment) (runViewSelecti
 	if err != nil {
 		return runViewSelection{}, err
 	}
-	selection := runViewSelection{RunID: runID, ViewID: "hq-" + runID, Detail: detail, Policy: "none"}
+	selection := runViewSelection{
+		RunID: runID, ViewID: "hq-" + runID, Detail: detail, Policy: "none",
+		Reference: latestRunViewReference(detail.Events),
+	}
 	if len(diagnostics) != 0 {
 		selection.Failure = &runViewFailure{Code: "view_evidence_invalid", Message: fmt.Sprintf("canonical run projection contains %d diagnostic(s)", len(diagnostics))}
 	}
@@ -326,6 +324,21 @@ func localToolActionByID(tool core.LocalToolDefinition, actionID string) (core.L
 		}
 	}
 	return core.LocalToolAction{}, false
+}
+
+func latestRunViewReference(events []worker.ResultRow) *worker.RunViewEvidence {
+	var selected *worker.RunViewEvidence
+	bestSequence := -1
+	for _, event := range events {
+		if event.View == nil || event.Seq <= bestSequence {
+			continue
+		}
+		copy := *event.View
+		copy.Provider.Dependencies = append([]worker.ProviderDependencyEvidence(nil), event.View.Provider.Dependencies...)
+		selected = &copy
+		bestSequence = event.Seq
+	}
+	return selected
 }
 
 func runViewOperationActionID(openActionID, operation string) string {
@@ -402,6 +415,13 @@ func buildRunViewOperationInput(action core.LocalToolAction, selection runViewSe
 			if definition.Required {
 				return nil, &runViewFailure{Code: "view_contract_invalid", Message: "view actions cannot require a native session reference"}
 			}
+			if operation != "open" && selection.Reference != nil && strings.TrimSpace(selection.Reference.NativeSessionID) != "" {
+				encoded, err := json.Marshal(selection.Reference.NativeSessionID)
+				if err != nil {
+					return nil, &runViewFailure{Code: "view_contract_invalid", Message: err.Error()}
+				}
+				input[definition.Name] = encoded
+			}
 			continue
 		}
 		expectedType, known := types[definition.Name]
@@ -437,9 +457,14 @@ func executeRunViewOperation(ctx context.Context, stdout io.Writer, operation st
 	if failure != nil {
 		return emitRunViewNonGreen(stdout, operation, selection, failure)
 	}
+	if operation != "open" && selection.Reference != nil && !sameRunViewProvider(selection.Reference.Provider, *prepared.Provider) {
+		return emitRunViewNonGreen(stdout, operation, selection, &runViewFailure{
+			Code: "view_reference_stale", Message: "canonical native view reference no longer matches the selected provider",
+		})
+	}
 	completion, err := prepared.Adapter.Run(ctx, request, nil)
 	if err != nil {
-		return emitRunViewNonGreen(stdout, operation, selection, &runViewFailure{Code: "view_provider_failed", Message: err.Error()})
+		return emitRunViewNonGreen(stdout, operation, selection, runViewProviderFailure(err))
 	}
 	receipt := runViewOperationReceipt{
 		Version: runViewProjectionVersion, Operation: operation, RunID: selection.RunID, ViewID: selection.ViewID,
@@ -469,6 +494,40 @@ func executeRunViewOperation(ctx context.Context, stdout io.Writer, operation st
 		return 1
 	}
 	return 0
+}
+
+func sameRunViewProvider(reference worker.ProviderEvidence, selected workeradapter.ProviderDescriptor) bool {
+	if runViewCapabilityScope(reference.CapabilityID) != runViewCapabilityScope(selected.CapabilityID) ||
+		reference.ProviderID != selected.ProviderID || reference.ContractVersion != selected.ContractVersion ||
+		reference.DeploymentID != selected.DeploymentID || reference.ProviderKind != selected.ProviderKind ||
+		reference.IntegrityDigest != selected.IntegrityDigest || reference.ConfigurationDigest != selected.ConfigurationDigest ||
+		reference.IdempotencyContract != selected.IdempotencyContract || len(reference.Dependencies) != len(selected.Dependencies) {
+		return false
+	}
+	for index := range reference.Dependencies {
+		left, right := reference.Dependencies[index], selected.Dependencies[index]
+		if left.Name != right.Name || left.ProviderID != right.ProviderID || left.ContractVersion != right.ContractVersion ||
+			left.DeploymentID != right.DeploymentID || left.ProviderKind != right.ProviderKind ||
+			left.IntegrityDigest != right.IntegrityDigest || left.ConfigurationDigest != right.ConfigurationDigest {
+			return false
+		}
+	}
+	return true
+}
+
+func runViewCapabilityScope(capabilityID string) string {
+	if index := strings.LastIndex(capabilityID, "/"); index >= 0 {
+		return capabilityID[:index]
+	}
+	return capabilityID
+}
+
+func runViewProviderFailure(err error) *runViewFailure {
+	var structured *workeradapter.FailureError
+	if errors.As(err, &structured) && structured.Validate() == nil {
+		return &runViewFailure{Code: structured.Code, Message: structured.Message}
+	}
+	return &runViewFailure{Code: "view_provider_failed", Message: err.Error()}
 }
 
 func tailRunView(ctx context.Context, stdout, stderr io.Writer, eventsPath string, selection runViewSelection, follow bool, poll time.Duration, maxBytes int) int {
