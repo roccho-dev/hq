@@ -39,6 +39,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return runTail(args[1:], stdout, stderr)
 		case "view":
 			return runView(args[1:], stdout, stderr)
+		case "run-view":
+			return runRunView(args[1:], stdout, stderr)
 		}
 	}
 	return runWorker(args, stdout, stderr)
