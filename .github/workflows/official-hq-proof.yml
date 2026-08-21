@@ -42,7 +42,11 @@ jobs:
             go version -m "$out/runtime/bin/$binary" > "$out/logs/$binary.buildinfo.txt"
             grep -F "vcs.revision=$source_sha" "$out/logs/$binary.buildinfo.txt"
             grep -F 'vcs.modified=false' "$out/logs/$binary.buildinfo.txt"
-            "$out/runtime/bin/$binary" --help > "$out/logs/$binary.help.txt"
+            set +e
+            "$out/runtime/bin/$binary" --help > "$out/logs/$binary.help.txt" 2>&1
+            rc=$?
+            set -e
+            if test "$binary" = hq; then test "$rc" -eq 0; else test "$rc" -eq 1; fi
           done
 
           git init -q "$RUNNER_TEMP/lsp"
@@ -70,7 +74,8 @@ jobs:
               "hqSha256": sha(root/"runtime/bin/hq"),
               "workerSha256": sha(root/"runtime/bin/hq-worker"),
               "goVersion": "go1.23.12",
-              "vcsModified": False
+              "vcsModified": False,
+              "workerHelpExit": 1
             },
             "lsp": {
               "sourceCommit": "989016ae2ae4cbf304a9ca29478f47fec794493f",
