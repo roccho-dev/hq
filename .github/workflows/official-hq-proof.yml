@@ -14,16 +14,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Download immutable official Release
+      - name: Download immutable official Release and pinned LSP
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          out="$RUNNER_TEMP/hq-official-3118886f"
+          out="$RUNNER_TEMP/hq-vim-runtime-3118886f-989016ae"
           tag=hq-artifact-3118886f34ac5615e8a7732a6297bd41900e21e1
           source_sha=3118886f34ac5615e8a7732a6297bd41900e21e1
-          mkdir -p "$out/release" "$out/runtime/bin" "$out/logs"
+          lsp_sha=989016ae2ae4cbf304a9ca29478f47fec794493f
+          lsp_tree=899cd0db6af40e3b1e0039b679541cd062cfa9e7
+          mkdir -p "$out/release" "$out/runtime/bin" "$out/runtime/lsp" "$out/logs"
+
           gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json targetCommitish,assets > "$out/logs/release.json"
           test "$(jq -r .targetCommitish "$out/logs/release.json")" = "$source_sha"
           test "$(jq -r '.assets | length' "$out/logs/release.json")" = 8
@@ -41,31 +44,61 @@ jobs:
             grep -F 'vcs.modified=false' "$out/logs/$binary.buildinfo.txt"
             "$out/runtime/bin/$binary" --help > "$out/logs/$binary.help.txt"
           done
+
+          git init -q "$RUNNER_TEMP/lsp"
+          git -C "$RUNNER_TEMP/lsp" remote add origin https://github.com/yegappan/lsp.git
+          git -C "$RUNNER_TEMP/lsp" fetch -q --depth=1 origin "$lsp_sha"
+          test "$(git -C "$RUNNER_TEMP/lsp" rev-parse FETCH_HEAD^{commit})" = "$lsp_sha"
+          test "$(git -C "$RUNNER_TEMP/lsp" rev-parse FETCH_HEAD^{tree})" = "$lsp_tree"
+          git -C "$RUNNER_TEMP/lsp" archive "$lsp_sha" | tar -x -C "$out/runtime/lsp"
+          test -f "$out/runtime/lsp/plugin/lsp.vim"
+          test -f "$out/runtime/lsp/autoload/lsp/lsp.vim"
+          printf '%s\n' "$lsp_sha" > "$out/runtime/lsp/.pinned-commit"
+          printf '%s\n' "$lsp_tree" > "$out/runtime/lsp/.pinned-tree"
+
           python3 - "$out" <<'PY'
           import hashlib, json, pathlib, sys
           root = pathlib.Path(sys.argv[1])
           def sha(path): return hashlib.sha256(path.read_bytes()).hexdigest()
           receipt = {
-            "schema": "hq.officialLinuxCarryReadback/1",
+            "schema": "hq.vimRuntimeCarryReadback/1",
             "status": "PASS",
-            "sourceCommit": "3118886f34ac5615e8a7732a6297bd41900e21e1",
-            "releaseTag": "hq-artifact-3118886f34ac5615e8a7732a6297bd41900e21e1",
-            "hqSha256": sha(root/"runtime/bin/hq"),
-            "workerSha256": sha(root/"runtime/bin/hq-worker"),
-            "goVersion": "go1.23.12",
-            "vcsModified": False,
-            "artifactIsTransportProjection": True
+            "target": "linux-amd64",
+            "hq": {
+              "sourceCommit": "3118886f34ac5615e8a7732a6297bd41900e21e1",
+              "releaseTag": "hq-artifact-3118886f34ac5615e8a7732a6297bd41900e21e1",
+              "hqSha256": sha(root/"runtime/bin/hq"),
+              "workerSha256": sha(root/"runtime/bin/hq-worker"),
+              "goVersion": "go1.23.12",
+              "vcsModified": False
+            },
+            "lsp": {
+              "sourceCommit": "989016ae2ae4cbf304a9ca29478f47fec794493f",
+              "tree": "899cd0db6af40e3b1e0039b679541cd062cfa9e7",
+              "fileCount": sum(1 for p in (root/"runtime/lsp").rglob("*") if p.is_file())
+            },
+            "runtime": {
+              "entrypoints": ["runtime/bin/hq", "runtime/bin/hq-worker"],
+              "lspRuntimePath": "runtime/lsp",
+              "networkRequiredAfterExtraction": False
+            },
+            "authority": {
+              "hqOwnsProductAndWorkerSemantics": True,
+              "editsOwnsVimUX": True,
+              "envsOwnsPlacementAndSupervision": True,
+              "artifactIsTransportProjection": True
+            }
           }
           (root/"receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
           PY
           (cd "$out" && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
           (cd "$out" && sha256sum --check SHA256SUMS)
 
-      - name: Upload exact official Linux runtime
+      - name: Upload exact official runtime and LSP
         uses: actions/upload-artifact@v4
         with:
-          name: hq-official-linux-3118886f
-          path: ${{ runner.temp }}/hq-official-3118886f
+          name: hq-vim-runtime-3118886f-989016ae
+          path: ${{ runner.temp }}/hq-vim-runtime-3118886f-989016ae
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
