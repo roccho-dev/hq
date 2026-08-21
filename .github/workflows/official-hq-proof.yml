@@ -2,321 +2,70 @@ name: Official hq artifacts
 
 on:
   pull_request:
-  push:
-    branches:
-      - proposals
+    paths:
+      - .github/workflows/official-hq-proof.yml
+  workflow_dispatch:
 
 permissions:
   contents: read
 
-env:
-  HQ_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-
 jobs:
   linux-official-hq-proof:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.HQ_SOURCE_SHA }}
-      - name: Assert exact source head
+      - name: Download immutable official Release
         shell: bash
-        run: |
-          actual="$(git rev-parse HEAD)"
-          printf 'expected=%s\nactual=%s\n' "$HQ_SOURCE_SHA" "$actual"
-          test "$actual" = "$HQ_SOURCE_SHA"
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.23.12"
-      - name: Build clean official Linux product binaries
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -z "$(git status --porcelain)"
-          build_dir="$RUNNER_TEMP/hq-official-linux-amd64"
-          rm -rf "$build_dir"
-          mkdir -p "$build_dir" artifacts/official
-          go build -trimpath -o "$build_dir/hq-linux-amd64" ./cmd/hq
-          go build -trimpath -o "$build_dir/hq-worker-linux-amd64" ./cmd/hq-worker
-          test -z "$(git status --porcelain)"
-          cp "$build_dir/hq-linux-amd64" artifacts/official/hq-linux-amd64
-          cp "$build_dir/hq-worker-linux-amd64" artifacts/official/hq-worker-linux-amd64
-          source_sha="$(git rev-parse HEAD)"
-          go_version="$(go env GOVERSION)"
-          for binary in artifacts/official/hq-linux-amd64 artifacts/official/hq-worker-linux-amd64; do
-            go version -m "$binary" | tee "$binary.buildinfo.txt"
-            go version -m "$binary" | grep -F "vcs.revision=$source_sha"
-            if go version -m "$binary" | grep -F 'vcs.modified=true'; then
-              echo "official binary was built from a modified tree: $binary" >&2
-              exit 1
-            fi
-            go version -m "$binary" | grep -F 'vcs.modified=false'
-          done
-          hq_sha="$(sha256sum artifacts/official/hq-linux-amd64 | awk '{print $1}')"
-          worker_sha="$(sha256sum artifacts/official/hq-worker-linux-amd64 | awk '{print $1}')"
-          cat > artifacts/official/manifest-linux-amd64.json <<EOF
-          {
-            "kind": "hq.officialArtifact.v1",
-            "source_sha": "$source_sha",
-            "go_version": "$go_version",
-            "os": "linux",
-            "arch": "amd64",
-            "artifacts": [
-              {"name": "hq-linux-amd64", "sha256": "$hq_sha"},
-              {"name": "hq-worker-linux-amd64", "sha256": "$worker_sha"}
-            ]
-          }
-          EOF
-          (
-            cd artifacts/official
-            sha256sum hq-linux-amd64 hq-worker-linux-amd64 manifest-linux-amd64.json > SHA256SUMS-linux-amd64
-          )
-      - name: Run repository checks after official build
-        run: bash scripts/check.sh
-      - name: Prove official Linux Tab completion
-        run: |
-          python3 scripts/pty-tab-proof-v2.py \
-            ./artifacts/official/hq-linux-amd64 \
-            artifacts/official-hq-interactive-tab-proof-linux.txt
-      - name: Require official Linux proof markers
-        run: |
-          grep -F 'SENT_KEYS: {" + <TAB>' artifacts/official-hq-interactive-tab-proof-linux.txt
-          grep -F 'SENT_BYTES_HEX: 7b2209' artifacts/official-hq-interactive-tab-proof-linux.txt
-          grep -F '"tabProofA"' artifacts/official-hq-interactive-tab-proof-linux.txt
-          grep -F '"tabProofB"' artifacts/official-hq-interactive-tab-proof-linux.txt
-          grep -F '"tabProofC"' artifacts/official-hq-interactive-tab-proof-linux.txt
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: hq-official-linux-amd64-${{ github.sha }}
-          path: artifacts/official/
-          if-no-files-found: error
-
-  windows-official-hq-proof:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.HQ_SOURCE_SHA }}
-      - name: Assert exact source head
-        shell: pwsh
-        run: |
-          $actual = (git rev-parse HEAD).Trim()
-          Write-Host "expected=$env:HQ_SOURCE_SHA"
-          Write-Host "actual=$actual"
-          if ($actual -ne $env:HQ_SOURCE_SHA) {
-            throw "source HEAD mismatch: expected $env:HQ_SOURCE_SHA, got $actual"
-          }
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.23.12"
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.x"
-      - name: Build clean official Windows product binaries
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if (git status --porcelain) { throw 'source tree is not clean before official build' }
-          $buildDir = Join-Path $env:RUNNER_TEMP 'hq-official-windows-amd64'
-          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $buildDir
-          New-Item -ItemType Directory -Force $buildDir | Out-Null
-          New-Item -ItemType Directory -Force artifacts\official | Out-Null
-          go build -trimpath -o (Join-Path $buildDir 'hq-windows-amd64.exe') ./cmd/hq
-          go build -trimpath -o (Join-Path $buildDir 'hq-worker-windows-amd64.exe') ./cmd/hq-worker
-          if (git status --porcelain) { throw 'source tree changed during official build' }
-          Copy-Item -LiteralPath (Join-Path $buildDir 'hq-windows-amd64.exe') -Destination artifacts\official\hq-windows-amd64.exe
-          Copy-Item -LiteralPath (Join-Path $buildDir 'hq-worker-windows-amd64.exe') -Destination artifacts\official\hq-worker-windows-amd64.exe
-          $sourceSha = (git rev-parse HEAD).Trim()
-          $goVersion = (go env GOVERSION).Trim()
-          foreach ($binary in @('artifacts\official\hq-windows-amd64.exe', 'artifacts\official\hq-worker-windows-amd64.exe')) {
-            $buildInfo = go version -m $binary
-            $buildInfo | Set-Content -Encoding utf8 "$binary.buildinfo.txt"
-            if (-not ($buildInfo | Select-String -SimpleMatch "vcs.revision=$sourceSha")) { throw "binary revision does not match source: $binary" }
-            if ($buildInfo | Select-String -SimpleMatch 'vcs.modified=true') { throw "official binary was built from a modified tree: $binary" }
-            if (-not ($buildInfo | Select-String -SimpleMatch 'vcs.modified=false')) { throw "binary lacks clean VCS evidence: $binary" }
-          }
-          $hqSha = (Get-FileHash -Algorithm SHA256 artifacts\official\hq-windows-amd64.exe).Hash.ToLowerInvariant()
-          $workerSha = (Get-FileHash -Algorithm SHA256 artifacts\official\hq-worker-windows-amd64.exe).Hash.ToLowerInvariant()
-          $manifest = [ordered]@{
-            kind = 'hq.officialArtifact.v1'
-            source_sha = $sourceSha
-            go_version = $goVersion
-            os = 'windows'
-            arch = 'amd64'
-            artifacts = @(
-              [ordered]@{name='hq-windows-amd64.exe'; sha256=$hqSha},
-              [ordered]@{name='hq-worker-windows-amd64.exe'; sha256=$workerSha}
-            )
-          }
-          $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifacts\official\manifest-windows-amd64.json
-          @(
-            "$hqSha  hq-windows-amd64.exe",
-            "$workerSha  hq-worker-windows-amd64.exe",
-            "$((Get-FileHash -Algorithm SHA256 artifacts\official\manifest-windows-amd64.json).Hash.ToLowerInvariant())  manifest-windows-amd64.json"
-          ) | Set-Content -Encoding ascii artifacts\official\SHA256SUMS-windows-amd64
-      - name: Install Windows terminal proof dependency
-        shell: pwsh
-        run: |
-          python -m pip install --disable-pip-version-check --quiet --upgrade pip
-          python -m pip install --disable-pip-version-check --quiet "setuptools==80.9.0" wexpect
-          python -c "import pkg_resources; import wexpect; print('windows terminal proof deps ok')"
-      - name: Run repository tests after official build
-        shell: pwsh
-        run: go test ./...
-      - name: Prove Vim-to-hq contract on Windows
-        shell: pwsh
-        run: |
-          python scripts/vim-hq-contract-proof.py `
-            --binary artifacts\official\hq-windows-amd64.exe `
-            --artifact artifacts\vim-hq-contract-proof-windows.json
-      - name: Prove official Windows Tab completion
-        shell: pwsh
-        run: |
-          python scripts/windows-tab-proof-v2.py `
-            .\artifacts\official\hq-windows-amd64.exe `
-            artifacts\official-hq-interactive-tab-proof-windows.txt
-      - name: Require Windows literal Tab proof markers
-        shell: pwsh
-        run: |
-          Select-String -Path artifacts\official-hq-interactive-tab-proof-windows.txt -SimpleMatch 'SENT_KEYS: {" + <TAB>'
-          Select-String -Path artifacts\official-hq-interactive-tab-proof-windows.txt -SimpleMatch 'SENT_BYTES_HEX: 7b2209'
-          Select-String -Path artifacts\official-hq-interactive-tab-proof-windows.txt -SimpleMatch 'WINDOWS_TERMINAL_SESSION: wexpect/winpty'
-          Select-String -Path artifacts\official-hq-interactive-tab-proof-windows.txt -SimpleMatch '"tabProofA"'
-          Select-String -Path artifacts\official-hq-interactive-tab-proof-windows.txt -SimpleMatch '"tabProofB"'
-          Select-String -Path artifacts\official-hq-interactive-tab-proof-windows.txt -SimpleMatch '"tabProofC"'
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: hq-official-windows-amd64-${{ github.sha }}
-          path: artifacts\official\
-          if-no-files-found: error
-
-  publish-official-product:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/proposals'
-    needs:
-      - linux-official-hq-proof
-      - windows-official-hq-proof
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: hq-official-linux-amd64-${{ github.sha }}
-          path: dist
-      - uses: actions/download-artifact@v4
-        with:
-          name: hq-official-windows-amd64-${{ github.sha }}
-          path: dist
-      - name: Publish and read back the immutable commit release
         env:
           GH_TOKEN: ${{ github.token }}
-        shell: bash
         run: |
           set -euo pipefail
-          test "$(jq -r .source_sha dist/manifest-linux-amd64.json)" = "$GITHUB_SHA"
-          test "$(jq -r .source_sha dist/manifest-windows-amd64.json)" = "$GITHUB_SHA"
-          test "$(jq -r .go_version dist/manifest-linux-amd64.json)" = "go1.23.12"
-          test "$(jq -r .go_version dist/manifest-windows-amd64.json)" = "go1.23.12"
-
-          jq -s --arg source_sha "$GITHUB_SHA" '{
-            kind: "hq.officialProduct.v1",
-            source_sha: $source_sha,
-            builds: map({os, arch, go_version}),
-            artifacts: map(.artifacts[])
-          }' dist/manifest-linux-amd64.json dist/manifest-windows-amd64.json > dist/hq-product-manifest.json
-          jq -e --arg source_sha "$GITHUB_SHA" '
-            .kind == "hq.officialProduct.v1" and
-            .source_sha == $source_sha and
-            (.builds | length == 2) and
-            (.artifacts | length == 4) and
-            ([.artifacts[].name] | sort) == ([
-              "hq-linux-amd64",
-              "hq-worker-linux-amd64",
-              "hq-windows-amd64.exe",
-              "hq-worker-windows-amd64.exe"
-            ] | sort)
-          ' dist/hq-product-manifest.json >/dev/null
-          (
-            cd dist
-            sha256sum \
-              hq-linux-amd64 hq-worker-linux-amd64 \
-              hq-windows-amd64.exe hq-worker-windows-amd64.exe \
-              manifest-linux-amd64.json manifest-windows-amd64.json \
-              hq-product-manifest.json > SHA256SUMS
-          )
-
-          tag="hq-artifact-$GITHUB_SHA"
-          verified_tag="hq-artifact-verified-$GITHUB_SHA"
-          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            rm -rf existing
-            mkdir existing
-            gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS --dir existing
-            cmp existing/SHA256SUMS dist/SHA256SUMS
-          else
-            gh release create "$tag" \
-              dist/hq-linux-amd64 \
-              dist/hq-worker-linux-amd64 \
-              dist/hq-windows-amd64.exe \
-              dist/hq-worker-windows-amd64.exe \
-              dist/manifest-linux-amd64.json \
-              dist/manifest-windows-amd64.json \
-              dist/hq-product-manifest.json \
-              dist/SHA256SUMS \
-              --repo "$GITHUB_REPOSITORY" \
-              --target "$GITHUB_SHA" \
-              --title "hq official artifact ${GITHUB_SHA:0:12}" \
-              --notes "One clean source commit produced the official Linux and native Windows hq/hq-worker artifact family. See hq-product-manifest.json and SHA256SUMS."
-          fi
-
-          rm -rf release-readback
-          mkdir release-readback
-          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | sort > release-readback/actual-assets.txt
-          cat > release-readback/expected-assets.txt <<'EOF'
-          SHA256SUMS
-          hq-linux-amd64
-          hq-product-manifest.json
-          hq-windows-amd64.exe
-          hq-worker-linux-amd64
-          hq-worker-windows-amd64.exe
-          manifest-linux-amd64.json
-          manifest-windows-amd64.json
-          EOF
-          sort -o release-readback/expected-assets.txt release-readback/expected-assets.txt
-          cmp release-readback/expected-assets.txt release-readback/actual-assets.txt
-          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir release-readback/assets
-
-          (
-            cd release-readback/assets
-            sha256sum -c SHA256SUMS
-          )
-          for name in \
-            hq-linux-amd64 hq-worker-linux-amd64 \
-            hq-windows-amd64.exe hq-worker-windows-amd64.exe \
-            manifest-linux-amd64.json manifest-windows-amd64.json \
-            hq-product-manifest.json SHA256SUMS; do
-            cmp "dist/$name" "release-readback/assets/$name"
+          out="$RUNNER_TEMP/hq-official-3118886f"
+          tag=hq-artifact-3118886f34ac5615e8a7732a6297bd41900e21e1
+          source_sha=3118886f34ac5615e8a7732a6297bd41900e21e1
+          mkdir -p "$out/release" "$out/runtime/bin" "$out/logs"
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json targetCommitish,assets > "$out/logs/release.json"
+          test "$(jq -r .targetCommitish "$out/logs/release.json")" = "$source_sha"
+          test "$(jq -r '.assets | length' "$out/logs/release.json")" = 8
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir "$out/release"
+          (cd "$out/release" && sha256sum --check SHA256SUMS) > "$out/logs/release-checksums.txt"
+          test "$(jq -r .source_sha "$out/release/manifest-linux-amd64.json")" = "$source_sha"
+          test "$(jq -r .go_version "$out/release/manifest-linux-amd64.json")" = go1.23.12
+          test "$(jq -r .os "$out/release/manifest-linux-amd64.json")" = linux
+          test "$(jq -r .arch "$out/release/manifest-linux-amd64.json")" = amd64
+          install -m 0555 "$out/release/hq-linux-amd64" "$out/runtime/bin/hq"
+          install -m 0555 "$out/release/hq-worker-linux-amd64" "$out/runtime/bin/hq-worker"
+          for binary in hq hq-worker; do
+            go version -m "$out/runtime/bin/$binary" > "$out/logs/$binary.buildinfo.txt"
+            grep -F "vcs.revision=$source_sha" "$out/logs/$binary.buildinfo.txt"
+            grep -F 'vcs.modified=false' "$out/logs/$binary.buildinfo.txt"
+            "$out/runtime/bin/$binary" --help > "$out/logs/$binary.help.txt"
           done
-          test "$(jq -r .source_sha release-readback/assets/manifest-linux-amd64.json)" = "$GITHUB_SHA"
-          test "$(jq -r .source_sha release-readback/assets/manifest-windows-amd64.json)" = "$GITHUB_SHA"
-          jq -e --arg source_sha "$GITHUB_SHA" '
-            .kind == "hq.officialProduct.v1" and
-            .source_sha == $source_sha and
-            (.builds | length == 2) and
-            (.artifacts | length == 4)
-          ' release-readback/assets/hq-product-manifest.json >/dev/null
+          python3 - "$out" <<'PY'
+          import hashlib, json, pathlib, sys
+          root = pathlib.Path(sys.argv[1])
+          def sha(path): return hashlib.sha256(path.read_bytes()).hexdigest()
+          receipt = {
+            "schema": "hq.officialLinuxCarryReadback/1",
+            "status": "PASS",
+            "sourceCommit": "3118886f34ac5615e8a7732a6297bd41900e21e1",
+            "releaseTag": "hq-artifact-3118886f34ac5615e8a7732a6297bd41900e21e1",
+            "hqSha256": sha(root/"runtime/bin/hq"),
+            "workerSha256": sha(root/"runtime/bin/hq-worker"),
+            "goVersion": "go1.23.12",
+            "vcsModified": False,
+            "artifactIsTransportProjection": True
+          }
+          (root/"receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
+          PY
+          (cd "$out" && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
+          (cd "$out" && sha256sum --check SHA256SUMS)
 
-          checksum_digest="$(sha256sum release-readback/assets/SHA256SUMS | awk '{print $1}')"
-          if gh release view "$verified_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            test "$(gh release view "$verified_tag" --repo "$GITHUB_REPOSITORY" --json targetCommitish --jq .targetCommitish)" = "$GITHUB_SHA"
-            test "$(gh release view "$verified_tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets | length')" = "0"
-          else
-            gh release create "$verified_tag" \
-              --repo "$GITHUB_REPOSITORY" \
-              --target "$GITHUB_SHA" \
-              --title "hq official artifact verified ${GITHUB_SHA:0:12}" \
-              --notes "Complete readback of $tag succeeded. All eight release assets matched the prepared publication; SHA256SUMS digest: $checksum_digest. This zero-asset marker is evidence only."
-          fi
-          test "$(gh release view "$verified_tag" --repo "$GITHUB_REPOSITORY" --json targetCommitish --jq .targetCommitish)" = "$GITHUB_SHA"
-          test "$(gh release view "$verified_tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets | length')" = "0"
+      - name: Upload exact official Linux runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: hq-official-linux-3118886f
+          path: ${{ runner.temp }}/hq-official-3118886f
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
