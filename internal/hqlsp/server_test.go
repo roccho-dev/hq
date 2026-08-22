@@ -467,7 +467,7 @@ func TestSelectedWorldRecallCompletionTransportsCandidateAndAppendsNothing(t *te
 	if len(wire.Result.Items) != 2 {
 		t.Fatalf("items=%#v", wire.Result.Items)
 	}
-	const wantIndexID = "sha256:287cea6457dfeba9d6896752ca6c6d56248faeaaf9cbbd40cd48855c436e957f"
+	const wantIndexID = "sha256:00c1841c2ec06bea73351b79027375f2c778205686f84858d183a28beb646a9b"
 	wantCandidateIDs := []string{
 		"sha256:e4af66171ece9d26ca3d68c44ed9311bfaa702932aacff682d1809b27375022b",
 		"sha256:30043a7d6282aa5d9bcaa9b8ae0108a1a398b77be08e2ec8bf137aceb222c032",

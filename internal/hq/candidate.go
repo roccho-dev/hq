@@ -33,6 +33,7 @@ type CandidateRank struct {
 	DirectCount        int `json:"direct_count"`
 	SubsequenceScore   int `json:"subsequence_score"`
 	RequiredPreference int `json:"required_preference"`
+	DefaultPreference  int `json:"default_preference"`
 	CandidateKind      int `json:"candidate_kind"`
 }
 
@@ -113,6 +114,6 @@ func candidateRank(rank core.WorldRecallRank) CandidateRank {
 		ExactCount: rank.ExactCount, PrefixCount: rank.PrefixCount,
 		SubstringCount: rank.SubstringCount, DirectCount: rank.DirectCount,
 		SubsequenceScore: rank.SubsequenceScore, RequiredPreference: rank.RequiredPreference,
-		CandidateKind: rank.CandidateKind,
+		DefaultPreference: rank.DefaultPreference, CandidateKind: rank.CandidateKind,
 	}
 }

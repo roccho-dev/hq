@@ -34,6 +34,8 @@ checks, edit ranges, and declarative field binding.
 
 Each `hq.command.v1` row declares:
 
+- optional `default: true` for the sole command preferred by an empty object query; explicit query matches always win, and selected-world validation rejects multiple defaults;
+
 - the human-facing command name, aliases, keywords, and description;
 - the base canonical instruction object;
 - accepted fields and their primitive types;
