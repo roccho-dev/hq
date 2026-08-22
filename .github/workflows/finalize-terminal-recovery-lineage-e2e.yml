@@ -1,0 +1,84 @@
+name: finalize terminal recovery lineage E2E
+
+on:
+  push:
+    branches:
+      - test/terminal-recovery-lineage-e2e-20260822
+
+permissions:
+  contents: write
+
+concurrency:
+  group: finalize-terminal-recovery-lineage-e2e-20260822
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TARGET: proposals
+      EXPECTED_BASE: 779a298f4efcff8df60205aaf973cb224388a82b
+      FEATURE: test/terminal-recovery-lineage-e2e-20260822
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.12"
+
+      - name: Verify the isolated recovery boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse origin/$TARGET)" = "$EXPECTED_BASE"
+          gofmt -w internal/worker/recovery_lineage_e2e_test.go
+          go test ./internal/worker -run '^TestTerminalRecoveryLineageE2E$' -count=1 -v | tee "$RUNNER_TEMP/recovery-e2e.log"
+          go test ./... -count=1 | tee "$RUNNER_TEMP/all-go-tests.log"
+          git diff --check
+
+      - id: clean
+        name: Create exact one-child test commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/finalize-terminal-recovery-lineage-e2e.yml
+          git add -A
+          tree=$(git write-tree)
+          export GIT_AUTHOR_NAME=roccho GIT_AUTHOR_EMAIL=40359643+roccho-dev@users.noreply.github.com
+          export GIT_COMMITTER_NAME=roccho GIT_COMMITTER_EMAIL=40359643+roccho-dev@users.noreply.github.com
+          commit=$(printf '%s\n' 'test: fix terminal recovery lineage as a narrow E2E' | git commit-tree "$tree" -p "$EXPECTED_BASE")
+          printf 'base=%s\ncommit=%s\ntree=%s\n' "$EXPECTED_BASE" "$commit" "$tree" | tee "$RUNNER_TEMP/identity.txt"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "tree=$tree" >> "$GITHUB_OUTPUT"
+
+      - name: Write and upload receipt
+        shell: bash
+        run: |
+          jq -n \
+            --arg base "$EXPECTED_BASE" \
+            --arg commit '${{ steps.clean.outputs.commit }}' \
+            --arg tree '${{ steps.clean.outputs.tree }}' \
+            '{schema:"hq.terminal-recovery-lineage-e2e/1",status:"PASS",base:$base,resultCommit:$commit,resultTree:$tree,fastForward:true,states:["failed","timeout","cancelled"],newInstruction:true,replyToPrior:true,newRun:true,priorEvidenceImmutable:true,providerInvoked:false}' \
+            > "$RUNNER_TEMP/receipt.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hq-terminal-recovery-e2e-${{ steps.clean.outputs.commit }}
+          path: |
+            ${{ runner.temp }}/identity.txt
+            ${{ runner.temp }}/receipt.json
+            ${{ runner.temp }}/recovery-e2e.log
+            ${{ runner.temp }}/all-go-tests.log
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Fast-forward proposals and clean feature branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          result='${{ steps.clean.outputs.commit }}'
+          git push origin "$result":refs/heads/"$TARGET" \
+            --force-with-lease=refs/heads/"$TARGET":"$EXPECTED_BASE"
+          git push origin "$result":refs/heads/"$FEATURE" \
+            --force-with-lease=refs/heads/"$FEATURE":"$GITHUB_SHA"
