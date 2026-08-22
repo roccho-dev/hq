@@ -97,6 +97,7 @@ type CommandDefinition struct {
 	Aliases        []string        `json:"aliases,omitempty"`
 	Keywords       []string        `json:"keywords,omitempty"`
 	Description    string          `json:"description,omitempty"`
+	Default        bool            `json:"default,omitempty"`
 	Instruction    map[string]any  `json:"instruction"`
 	Fields         []CommandField  `json:"fields,omitempty"`
 	Presets        []CommandPreset `json:"presets,omitempty"`

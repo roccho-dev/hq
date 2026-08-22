@@ -131,6 +131,7 @@ func (w *JsonlWorld) ValidateSelected() error {
 		return errors.New("selected world has invalid canonical digest")
 	}
 	seen := map[string]bool{}
+	defaultCommand := ""
 	for _, command := range w.Commands {
 		if !validStableIdentity(command.CommandID) || !validStableIdentity(command.CommandVersion) {
 			return fmt.Errorf("command %q requires command_id and command_version in a selected world", command.Name)
@@ -139,6 +140,12 @@ func (w *JsonlWorld) ValidateSelected() error {
 			return fmt.Errorf("duplicate command_id %q", command.CommandID)
 		}
 		seen[command.CommandID] = true
+		if command.Default {
+			if defaultCommand != "" {
+				return fmt.Errorf("selected world has multiple default commands %q and %q", defaultCommand, command.Name)
+			}
+			defaultCommand = command.Name
+		}
 		for _, field := range command.Fields {
 			if !ValidHistoryPolicy(field.HistoryPolicy) {
 				return fmt.Errorf("command %q field %q has unsupported history_policy %q", command.Name, field.Name, field.HistoryPolicy)

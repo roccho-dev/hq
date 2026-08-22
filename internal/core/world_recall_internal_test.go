@@ -13,7 +13,7 @@ func TestWorldRecallIndexIdentityLiteralGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "sha256:4f22416f3fa08cf02fd2a664b2352f631fee093c58187b7fa0f12a13539f38bb"; indexID != want {
+	if want := "sha256:3c928a6b87dd2ec8f8a2439cae0b118c4d6ae509c9267c621f46ea1488240415"; indexID != want {
 		t.Fatalf("index id=%q", indexID)
 	}
 }
@@ -208,4 +208,38 @@ func recallCoreWorld(t *testing.T, commands ...CommandDefinition) *JsonlWorld {
 
 func recallCoreIdentifier(identity WorldRecallCandidateIdentity) (string, error) {
 	return CanonicalDigest(identity)
+}
+
+func TestDefaultCommandIsUniqueAndRanksOnlyEmptyRecall(t *testing.T) {
+	world := recallCoreWorld(t,
+		CommandDefinition{
+			Kind: CommandInputKind, CommandID: "command.direct.open", CommandVersion: "v1",
+			Name: "direct.open", Keywords: []string{"direct", "business"},
+			Instruction: map[string]any{"op": "run", "target": "host"},
+		},
+		CommandDefinition{
+			Kind: CommandInputKind, CommandID: "command.agent.exec", CommandVersion: "v1",
+			Name: "agent.exec", Default: true, Keywords: []string{"agent", "codex"},
+			Instruction: map[string]any{"op": "run", "target": "codex"},
+		},
+	)
+	index, err := PrepareWorldRecall(world, recallCoreIdentifier)
+	if err != nil {
+		t.Fatal(err)
+	}
+	empty := index.Recall(WorldRecallQuery{Scope: WorldRecallObjectQuery})
+	if len(empty) != 2 || empty[0].CommandName != "agent.exec" || empty[0].Rank.DefaultPreference != 1 {
+		t.Fatalf("empty recall did not prefer declared default: %#v", empty)
+	}
+	explicit := index.Recall(WorldRecallQuery{Scope: WorldRecallObjectQuery, Text: "direct"})
+	if len(explicit) != 1 || explicit[0].CommandName != "direct.open" || explicit[0].Rank.DefaultPreference != 0 {
+		t.Fatalf("default overrode explicit recall: %#v", explicit)
+	}
+	invalid := recallCoreWorld(t,
+		CommandDefinition{Kind: CommandInputKind, CommandID: "command.one", CommandVersion: "v1", Name: "one", Default: true, Instruction: map[string]any{"op": "run"}},
+		CommandDefinition{Kind: CommandInputKind, CommandID: "command.two", CommandVersion: "v1", Name: "two", Default: true, Instruction: map[string]any{"op": "run"}},
+	)
+	if prepared, err := PrepareWorldRecall(invalid, recallCoreIdentifier); err == nil || prepared != nil {
+		t.Fatalf("multiple defaults were accepted: index=%#v err=%v", prepared, err)
+	}
 }

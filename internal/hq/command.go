@@ -239,7 +239,8 @@ func recallSortText(rank core.WorldRecallRank, candidateID string) string {
 		value      int64
 		descending bool
 	}{
-		{int64(rank.ScopeCompatibility), false}, {int64(rank.WorstClass), false},
+		{int64(rank.ScopeCompatibility), false}, {int64(rank.DefaultPreference), true},
+		{int64(rank.WorstClass), false},
 		{int64(rank.ExactCount), true}, {int64(rank.PrefixCount), true},
 		{int64(rank.SubstringCount), true}, {int64(rank.DirectCount), true},
 		{int64(rank.SubsequenceScore), true}, {int64(rank.RequiredPreference), true},

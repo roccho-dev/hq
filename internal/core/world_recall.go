@@ -17,7 +17,7 @@ const (
 	WorldRecallNormalizationVersion  = "hq.recall-normalization.v1"
 	WorldRecallMatcherModule         = "github.com/sahilm/fuzzy"
 	WorldRecallMatcherVersion        = "v0.1.3"
-	WorldRecallRankVersion           = "hq.world-recall-rank.v1"
+	WorldRecallRankVersion           = "hq.world-recall-rank.v2"
 	CommandObjectMaterializerVersion = "hq.command-object-materializer.v1"
 )
 
@@ -70,6 +70,7 @@ type WorldRecallRank struct {
 	DirectCount        int
 	SubsequenceScore   int
 	RequiredPreference int
+	DefaultPreference  int
 	SourcePreference   int
 	CandidateKind      int
 	HistoryRecency     int64
@@ -139,6 +140,7 @@ type recallCandidate struct {
 	Description      string
 	Materialization  string
 	Required         bool
+	Default          bool
 	Terms            []recallTerm
 	SourcePreference int
 	HistoryRecency   int64
@@ -199,7 +201,7 @@ func PrepareWorldRecall(world *JsonlWorld, identify WorldRecallCandidateIdentifi
 			CommandName: command.Name, Label: command.Name,
 			Detail:      "schema_template | world declaration",
 			Description: command.Description, Materialization: template,
-			Terms: templateTerms,
+			Default: command.Default, Terms: templateTerms,
 		})
 		for _, preset := range command.Presets {
 			materialization := renderPreset(command, preset)
@@ -211,7 +213,7 @@ func PrepareWorldRecall(world *JsonlWorld, identify WorldRecallCandidateIdentifi
 				CommandName: command.Name, Label: preset.Label,
 				Detail:      "object_preset | explicit world preset",
 				Description: command.Description, Materialization: materialization,
-				Terms: terms,
+				Default: command.Default, Terms: terms,
 			})
 		}
 		for _, field := range command.Fields {
@@ -533,6 +535,9 @@ func recallRank(candidate recallCandidate, matches []WorldRecallMatch, historyAw
 	if candidate.Kind == WorldRecallMissingKeyKind && candidate.Required {
 		rank.RequiredPreference = 1
 	}
+	if len(matches) == 0 && candidate.Default {
+		rank.DefaultPreference = 1
+	}
 	return rank
 }
 
@@ -540,6 +545,9 @@ func lessRecallResult(left, right WorldRecallResult) bool {
 	a, b := left.Rank, right.Rank
 	if a.ScopeCompatibility != b.ScopeCompatibility {
 		return a.ScopeCompatibility < b.ScopeCompatibility
+	}
+	if a.DefaultPreference != b.DefaultPreference {
+		return a.DefaultPreference > b.DefaultPreference
 	}
 	if a.WorstClass != b.WorstClass {
 		return a.WorstClass < b.WorstClass
@@ -790,20 +798,20 @@ func recallDescriptionKind(kind string) bool {
 
 func recallTermKindOrder(kind string) int {
 	order := map[string]int{
-		"command.name":       0,
-		"command.alias":      1,
-		"command.keyword":    2,
-		"field.name":         3,
-		"field.enum":         4,
-		"field.default":      5,
-		"field.example":      6,
-		"field.materialized": 7,
-		"preset.label":       8,
-		"preset.value":       9,
-		"history.search":     10,
+		"command.name":        0,
+		"command.alias":       1,
+		"command.keyword":     2,
+		"field.name":          3,
+		"field.enum":          4,
+		"field.default":       5,
+		"field.example":       6,
+		"field.materialized":  7,
+		"preset.label":        8,
+		"preset.value":        9,
+		"history.search":      10,
 		"history.field_value": 11,
-		"command.description":  12,
-		"field.description":    13,
+		"command.description": 12,
+		"field.description":   13,
 	}
 	if value, ok := order[kind]; ok {
 		return value

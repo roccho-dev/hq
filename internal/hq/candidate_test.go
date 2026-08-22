@@ -34,7 +34,7 @@ func TestSelectedWorldRecallCandidateTransportGolden(t *testing.T) {
 	if len(suggestions) != 2 {
 		t.Fatalf("suggestions=%#v", suggestions)
 	}
-	const wantIndexID = "sha256:287cea6457dfeba9d6896752ca6c6d56248faeaaf9cbbd40cd48855c436e957f"
+	const wantIndexID = "sha256:00c1841c2ec06bea73351b79027375f2c778205686f84858d183a28beb646a9b"
 	wantCandidateIDs := []string{"sha256:e4af66171ece9d26ca3d68c44ed9311bfaa702932aacff682d1809b27375022b", "sha256:30043a7d6282aa5d9bcaa9b8ae0108a1a398b77be08e2ec8bf137aceb222c032"}
 	if recall.ID() != wantIndexID {
 		t.Fatalf("index id=%q", recall.ID())
@@ -205,7 +205,7 @@ func assertCandidateJSON(t *testing.T, candidate Candidate) {
 		t.Fatalf("candidate JSON fields=%v", gotKeys)
 	}
 	assertJSONKeys(t, object["edit"], []string{"end_byte", "new_text", "start_byte"})
-	assertJSONKeys(t, object["rank"], []string{"candidate_kind", "direct_count", "exact_count", "prefix_count", "required_preference", "scope_compatibility", "subsequence_score", "substring_count", "worst_class"})
+	assertJSONKeys(t, object["rank"], []string{"candidate_kind", "default_preference", "direct_count", "exact_count", "prefix_count", "required_preference", "scope_compatibility", "subsequence_score", "substring_count", "worst_class"})
 	var sourceRefs []json.RawMessage
 	if err := json.Unmarshal(object["source_refs"], &sourceRefs); err != nil {
 		t.Fatal(err)
